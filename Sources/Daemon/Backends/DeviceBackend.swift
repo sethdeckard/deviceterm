@@ -111,6 +111,11 @@ protocol DeviceBackend: AnyObject, Sendable {
     /// panel the fold lit. The default does nothing, having one panel.
     func noteHingeMoved()
 
+    /// Be told the hinge's first reading, which says where the hinge is but
+    /// not that it moved. A backend whose panel can move looks for the lit
+    /// panel, without counting it as a fold. The default does nothing.
+    func noteHingeFound()
+
     /// The device's physical orientation, as opposed to the orientation its
     /// interface shows, for a backend that can read it. A foldable is drawn in
     /// device space, so its pane needs this even while an app holds the
@@ -495,6 +500,9 @@ extension DeviceBackend {
 
     /// Default: nothing to follow, for the same reason.
     func noteHingeMoved() {}
+
+    /// Default: nothing to follow, for the same reason.
+    func noteHingeFound() {}
 
     /// Default: unreadable. Only a foldable is drawn in device space.
     func readDeviceOrientation() async -> Orientation? { nil }

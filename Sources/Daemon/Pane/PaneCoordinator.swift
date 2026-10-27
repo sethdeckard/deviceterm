@@ -3293,9 +3293,15 @@ public actor PaneCoordinator {
     /// reading without starting a monitor against a device that is not there.
     func publishHinge(paneId: UUID, degrees: Double) {
         guard let record = panes[paneId], record.observedHingeDegrees != degrees else { return }
+        let firstReading = record.observedHingeDegrees == nil
         record.observedHingeDegrees = degrees
-        // Covers a fold made outside this daemon, such as from Device Hub.
-        record.backend?.noteHingeMoved()
+        // Covers a fold made outside this daemon, such as from Device Hub. The
+        // first reading only finds the hinge: no fold behind it.
+        if firstReading {
+            record.backend?.noteHingeFound()
+        } else {
+            record.backend?.noteHingeMoved()
+        }
         sendHinge(record: record, paneId: paneId, degrees: degrees)
     }
 

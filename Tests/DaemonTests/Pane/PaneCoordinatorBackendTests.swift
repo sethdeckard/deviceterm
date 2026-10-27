@@ -67,6 +67,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     var onFrontmostTree: (@Sendable () -> Void)?
     private(set) var openAppSwitcherCalls = 0
     private(set) var hingeMovedNotes = 0
+    private(set) var hingeFoundNotes = 0
     /// What `readDeviceOrientation()` answers.
     var deviceOrientationReading: Orientation?
     /// Holds each device-orientation read until `releaseDeviceOrientationRead()`.
@@ -265,6 +266,7 @@ final class MockDeviceBackend: DeviceBackend, @unchecked Sendable {
     }
 
     func noteHingeMoved() { hingeMovedNotes += 1 }
+    func noteHingeFound() { hingeFoundNotes += 1 }
 
     func readDeviceOrientation() async -> Orientation? {
         if holdDeviceOrientationReads {
@@ -1698,14 +1700,16 @@ func anOrientationEventFromAnOlderDaemonDecodesWithoutADeviceOrientation() throw
 func aReadHingeAngleSendsTheBackendLookingForItsPanel() async throws {
     // A fold made in Device Hub reaches the daemon only as a reading, and
     // the bound panel going dark raises too few screen-properties changes
-    // to start the search on its own. A repeated reading is not a move.
+    // to start the search on its own. A repeated reading is not a move, and
+    // nor is the first: it finds the hinge rather than saying it moved.
     let backend = MockDeviceBackend()
     let coordinator = PaneCoordinator()
     let pane = try await coordinator.createMockPane(udid: "hinge-follow", sessionId: UUID(), backend: backend)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 120)
     await coordinator.publishHinge(paneId: pane.paneId, degrees: 60)
-    #expect(backend.hingeMovedNotes == 2)
+    #expect(backend.hingeFoundNotes == 1)
+    #expect(backend.hingeMovedNotes == 1)
 }
 
 @Test

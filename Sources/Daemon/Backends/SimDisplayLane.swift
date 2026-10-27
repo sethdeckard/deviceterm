@@ -79,6 +79,19 @@ final class SimDisplayLane: @unchecked Sendable {
     /// Where orientation changes go, kept so a held one can be let out later.
     /// Owned by `queue`.
     private var orientationSink: (@Sendable (Orientation) -> Void)?
+    /// The orientation the pane was last given, which a held one is compared
+    /// with to tell iOS moving panels. Owned by `queue`.
+    private var shownOrientation: Orientation?
+    /// The panel an orientation change moved the display to ahead of
+    /// `devicectl`, until a read agrees (`ActivePanelSearch.next`). Owned by
+    /// `queue`.
+    private var movedEarlyTo: UInt32?
+    /// Whether the current early move has claimed its one lit-frame refresh
+    /// attempt (`claimEarlyRefresh`). Owned by `queue`.
+    private var earlyMoveRefreshed = false
+    /// When the hinge last moved, as uptime nanoseconds, nil until it has.
+    /// Owned by `queue`.
+    private var hingeMovedAt: UInt64?
     /// Looks for the lit panel again at `ActivePanelSearch.settleCheckSeconds`
     /// after the first bind. Owned by `queue`.
     private var settleTask: Task<Void, Never>?
@@ -294,6 +307,7 @@ final class SimDisplayLane: @unchecked Sendable {
             followingActivePanel = false
             activePanelDirty = false
             heldOrientation = nil
+            movedEarlyTo = nil
             orientationSink = nil
             handle?.stopOrientation()
         }
@@ -430,6 +444,8 @@ final class SimDisplayLane: @unchecked Sendable {
                 queue: orientationQueue
             )
             orientationSink = onChange
+            // What the pane is seeded with at bootstrap.
+            shownOrientation = currentOrientationLocked()
             return true
         } catch {
             // If orientation observation cannot start, leave the pane on its
@@ -450,12 +466,48 @@ final class SimDisplayLane: @unchecked Sendable {
     private func reportOrientation(_ orientation: Orientation) {
         queue.async { [self] in
             guard activePanelReader != nil, followingActivePanel else {
-                orientationSink?(orientation)
+                tellOrientationLocked(orientation)
                 return
             }
             heldOrientation = orientation
             DiagnosticLog.panel.notice("orientation held: \(orientation.rawValue, privacy: .public)")
+            moveOnOrientationLocked(orientation)
         }
+    }
+
+    /// Move to the other panel, speculatively, when the held `orientation`
+    /// suggests iOS already has (`ActivePanelSearch.orientationMovesPanel`),
+    /// rather than waiting seconds for `devicectl` to report it. On the lane's
+    /// queue. The follower keeps reading: it confirms the move when
+    /// `devicectl` agrees, moves back to the panel `devicectl` reports if the
+    /// read budget runs out first, and falls back to the content search if
+    /// the readings fail or stay undecided.
+    private func moveOnOrientationLocked(_ orientation: Orientation) {
+        let hingeMovedSecondsAgo = hingeMovedAt.map {
+            Double(DispatchTime.now().uptimeNanoseconds &- $0) / 1_000_000_000
+        }
+        guard movedEarlyTo == nil, let handle, handle.hasMultiplePanels,
+            ActivePanelSearch.orientationMovesPanel(
+                held: orientation,
+                shown: shownOrientation,
+                hingeMovedSecondsAgo: hingeMovedSecondsAgo
+            ),
+            handle.rebindToOtherPanel()
+        else { return }
+        DiagnosticLog.panel.notice(
+            "orientation moved to screen \(handle.boundScreenID, privacy: .public) ahead of devicectl"
+        )
+        adoptReboundPanelLocked(handle, litFrameOwed: true)
+        // After adopting, which clears it for every other move.
+        movedEarlyTo = handle.boundScreenID
+        earlyMoveRefreshed = false
+    }
+
+    /// Give the pane `orientation`, and remember it as the one it shows. On
+    /// the lane's queue.
+    private func tellOrientationLocked(_ orientation: Orientation) {
+        shownOrientation = orientation
+        orientationSink?(orientation)
     }
 
     /// Let a held orientation out, on the lane's queue. With `serial`, only if
@@ -466,7 +518,7 @@ final class SimDisplayLane: @unchecked Sendable {
         guard let orientation = heldOrientation else { return }
         heldOrientation = nil
         DiagnosticLog.panel.notice("orientation released: \(orientation.rawValue, privacy: .public)")
-        orientationSink?(orientation)
+        tellOrientationLocked(orientation)
     }
 
     /// Look for the lit panel again at each of
@@ -480,20 +532,31 @@ final class SimDisplayLane: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: (seconds - elapsed) * 1_000_000_000)
                 elapsed = seconds
                 guard !Task.isCancelled, let self else { return }
-                self.followFold()
+                // A look, not a fold: no hinge evidence.
+                self.searchForPanelSwap()
             }
         }
     }
 
     // MARK: - Following a fold
 
-    /// Look for the panel a fold lit, whoever made it.
+    /// Look for the panel a fold lit, whoever made it: after a fold this
+    /// daemon sent, or a changed hinge angle read off the device.
     ///
     /// A fold's own screen-properties change can't be relied on for this: the
     /// callback is registered on the bound panel, and one going dark raises
     /// few of them, so a pane could sit on it for many seconds after iOS lit
-    /// the other.
-    func followFold() { searchForPanelSwap() }
+    /// the other. The call also records the hinge moving, which an
+    /// orientation change needs before it counts as a likely panel switch
+    /// (`moveOnOrientationLocked`).
+    func followFold() {
+        queue.async { [self] in hingeMovedAt = DispatchTime.now().uptimeNanoseconds }
+        searchForPanelSwap()
+    }
+
+    /// Look for the lit panel without evidence of a fold: on the hinge's
+    /// first reading, which says where it is rather than that it moved.
+    func lookForLitPanel() { searchForPanelSwap() }
 
     /// Start looking for the lit panel to move to another display candidate,
     /// which is what a fold does on a two-panel device.
@@ -596,7 +659,8 @@ final class SimDisplayLane: @unchecked Sendable {
             }
             reads += 1
             let bound = await boundScreenID()
-            let step = ActivePanelSearch.next(afterReads: reads, reading: reading, bound: bound)
+            let early = await earlyMove(settledBy: reading)
+            let step = ActivePanelSearch.next(afterReads: reads, reading: reading, bound: bound, movedEarlyTo: early)
             let readDescription = String(describing: reading)
             let stepDescription = String(describing: step)
             DiagnosticLog.panel.notice(
@@ -620,6 +684,10 @@ final class SimDisplayLane: @unchecked Sendable {
                 if reading == .panel(bound) {
                     await releaseHeldOrientation(ifCurrent: serial)
                     await refreshUntilLit(since: serial)
+                } else if early == bound, await claimEarlyRefresh() {
+                    // Moved ahead of `devicectl`: the new panel still owes its
+                    // first lit frame.
+                    await refreshUntilLit(since: serial)
                 }
                 try? await Task.sleep(nanoseconds: nanoseconds)
 
@@ -633,6 +701,39 @@ final class SimDisplayLane: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    /// The panel an orientation change moved the display to, still awaiting
+    /// `devicectl`'s agreement, from off the lane's queue. Only a `reading`
+    /// that names it ends the wait here. Any other keeps it: one naming the
+    /// panel left behind is `devicectl` lagging, and an undecided or failed
+    /// one says nothing about the move. A move back, the content search, or
+    /// the follower ending clears it instead.
+    private func earlyMove(settledBy reading: DeviceCtlDisplays.ActivePanel) async -> UInt32? {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let early = movedEarlyTo
+                if case let .panel(screenID) = reading, screenID == early {
+                    movedEarlyTo = nil
+                }
+                continuation.resume(returning: early)
+            }
+        }
+    }
+
+    /// Whether the new panel of an early move still has its one lit-frame
+    /// refresh to come, claiming it if so, from off the lane's queue. One per
+    /// move: a refresh waits out a dark panel, and a wrong move lands on one,
+    /// so refreshing on every waiting read would hold the move back for the
+    /// whole refresh each time.
+    private func claimEarlyRefresh() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let claimed = !earlyMoveRefreshed
+                earlyMoveRefreshed = true
+                continuation.resume(returning: claimed)
+            }
+        }
     }
 
     /// `releaseHeldOrientationLocked(ifCurrent:)`, from off the lane's queue.
@@ -662,6 +763,8 @@ final class SimDisplayLane: @unchecked Sendable {
                 }
                 followingActivePanel = false
                 activePanelDirty = false
+                // No reads follow, so nothing is left to agree with a move.
+                movedEarlyTo = nil
                 releaseHeldOrientationLocked()
                 continuation.resume(returning: true)
             }
@@ -839,11 +942,13 @@ final class SimDisplayLane: @unchecked Sendable {
         }
         onPanelChange?(Self.boundPanel(of: handle))
         // Read off the new panel, which supersedes anything held for the old
-        // one. Its own registration seeds no orientation of its own.
+        // one. Its own registration seeds no orientation of its own. Any move
+        // also ends a wait for `devicectl` to agree with an earlier one.
         heldOrientation = nil
+        movedEarlyTo = nil
         if let orientation = currentOrientationLocked() {
             DiagnosticLog.panel.notice("orientation on rebind: \(orientation.rawValue, privacy: .public)")
-            orientationSink?(orientation)
+            tellOrientationLocked(orientation)
         }
     }
 
@@ -871,6 +976,7 @@ final class SimDisplayLane: @unchecked Sendable {
         followingActivePanel = false
         activePanelDirty = false
         heldOrientation = nil
+        movedEarlyTo = nil
         orientationSink = nil
         litFrameOwed = false
         // Unregisters orientation observation too: the coordinator fences its

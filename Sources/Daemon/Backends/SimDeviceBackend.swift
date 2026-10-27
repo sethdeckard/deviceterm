@@ -698,6 +698,8 @@ final class SimDeviceBackend: DeviceBackend, @unchecked Sendable {
 
     func noteHingeMoved() { display.followFold() }
 
+    func noteHingeFound() { display.lookForLitPanel() }
+
     func readDeviceOrientation() async -> Orientation? {
         guard capabilities.fold else { return nil }
         let udid = self.udid

@@ -257,6 +257,16 @@ typedef void (^CSBDisplayOrientationCallback)(CSBDisplayOrientation orientation)
 /// be completed.
 - (BOOL)rebindToLitPanel;
 
+/// Move the binding to the one other panel of a two-panel device, whatever
+/// either panel's framebuffer shows: for a caller that knows iOS has moved
+/// to the other panel before anything readable says which one that is.
+///
+/// Returns NO when the handle isn't started, when there isn't exactly one
+/// sized candidate besides the bound one, when that candidate can't be told
+/// apart by `screenID`, and when the move could not be completed (as
+/// `rebindToScreenID:`).
+- (BOOL)rebindToOtherPanel;
+
 /// Move the binding to the panel whose `SimScreenProperties.screenID` is
 /// `screenID`, whatever either panel's framebuffer shows.
 ///

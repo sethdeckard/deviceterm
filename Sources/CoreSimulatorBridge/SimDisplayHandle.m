@@ -623,6 +623,28 @@ static NSString *CSBUniqueIdForCandidate(id candidate) {
     return [self _moveBindingFrom:current to:target among:sized];
 }
 
+- (BOOL)rebindToOtherPanel {
+    if (!self.running) return NO;
+    unsigned int bound = self.boundScreenID;
+    if (bound == 0) return NO;
+    unsigned int other = 0;
+    for (id<SimDisplayIOSurfaceRenderable> candidate in
+         CSBSizedCandidates([self _candidatesWithError:NULL])) {
+        id<CSBSimScreenProperties> props = CSBPropertiesForCandidate(candidate);
+        unsigned int candidateID = 0;
+        @try {
+            candidateID = props.screenID;
+        } @catch (NSException *e) {}
+        if (candidateID == bound) continue;
+        // A candidate with no identity, or a second other panel, is not the
+        // two-panel device this knows how to cross.
+        if (candidateID == 0 || other != 0) return NO;
+        other = candidateID;
+    }
+    if (other == 0) return NO;
+    return [self rebindToScreenID:other];
+}
+
 /// Move registrations from `current` to `lit`, rolling back if registration
 /// fails. Seed the first frame when frames are active.
 - (BOOL)_moveBindingFrom:(id<SimDisplayIOSurfaceRenderable>)current
