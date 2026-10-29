@@ -20,6 +20,20 @@ import TerminalSurface
 /// the config struct around: its pointers are dead post-call.
 @MainActor
 public final class GhosttyTerminalSurface: TerminalSurface {
+    /// One clipboard representation: a MIME type and its bytes.
+    struct ClipboardRepresentation: Sendable {
+        let mime: String
+        let data: Data
+    }
+
+    /// What a confirmation request would hand over if approved: the
+    /// representations a read would return or a Kitty write would
+    /// store, and the MIME listing a request asked for.
+    struct ClipboardPayload: Sendable {
+        let contents: [ClipboardRepresentation]
+        let available: [String]
+    }
+
     /// A macOS virtual keycode no physical key uses, so libghostty
     /// resolves it to `.unidentified`.
     ///
@@ -43,7 +57,16 @@ public final class GhosttyTerminalSurface: TerminalSurface {
     /// a real keyboard does; see `sendNul`.
     private static let controlLeftKeycode: UInt32 = 0x3B
 
+    /// The only MIME type served. libghostty folds the text aliases
+    /// (`text/plain;charset=utf-8`, `UTF8_STRING`, and the like) into
+    /// it before asking, so a text-only terminal answers this one.
+    private static let textMime = "text/plain"
+
     public weak var delegate: TerminalSurfaceDelegate?
+    /// Whether libghostty's termios password detection reports a prompt on
+    /// screen. Follows its `.on` / `.off` secure-input actions; the user's
+    /// `toggle_secure_input` binding doesn't move it.
+    public private(set) var isSecureInputActive = false
 
     private let resourcesDirectory: URL?
     private let loadUserConfig: Bool
@@ -109,6 +132,7 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         let commandC = strdup(ShellCommandLine.commandString(for: command))
         let cwdC = command.workingDirectory.flatMap { strdup($0) }
         let initialInputC = command.initialInput.flatMap { strdup($0) }
+        let initialOutputC = command.initialOutput.flatMap { strdup($0) }
         let pairs = ShellCommandLine.environmentPairs(for: command)
         let envC: [(UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?)] =
             pairs.map { (strdup($0.key), strdup($0.value)) }
@@ -116,6 +140,7 @@ public final class GhosttyTerminalSurface: TerminalSurface {
             free(commandC)
             if let cwdC { free(cwdC) }
             if let initialInputC { free(initialInputC) }
+            if let initialOutputC { free(initialOutputC) }
             for (key, value) in envC { free(key); free(value) }
         }
 
@@ -137,6 +162,7 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         config.command = UnsafePointer(commandC)
         config.working_directory = cwdC.map { UnsafePointer($0) }
         config.initial_input = initialInputC.map { UnsafePointer($0) }
+        config.initial_output = initialOutputC.map { UnsafePointer($0) }
         // Inert while `command` is set: libghostty forces
         // `wait-after-command` on for a surface given an explicit command,
         // and the surface option only ever sets it true. Kept so the knob
@@ -461,6 +487,13 @@ public final class GhosttyTerminalSurface: TerminalSurface {
             )
         }
         defer { ghostty_surface_free_text(surface, &textStruct) }
+        return capturedText(textStruct)
+    }
+
+    /// The text libghostty filled `textStruct` with, as a `String` with
+    /// rows separated by `"\n"`. The styled format ends rows with CRLF,
+    /// which `CapturedScreenText` rewrites so both formats agree.
+    private func capturedText(_ textStruct: ghostty_text_s) -> String {
         guard let ptr = textStruct.text else { return "" }
         // String(cString:) requires NUL-termination guarantees we
         // can't make about libghostty's buffer; round-trip via Data
@@ -476,55 +509,118 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         return CapturedScreenText.normalizingRowSeparators(raw)
     }
 
-    // MARK: - Clipboard (driven by the runtime's clipboard callbacks)
-
-    /// Fulfil a libghostty clipboard *read* (⌘V / OSC 52 read): pull
-    /// the macOS pasteboard string and hand it back through
-    /// `ghostty_surface_complete_clipboard_request` with
-    /// `confirmed: false`. False is deliberate: it lets libghostty
-    /// apply its read/paste policy and call back into
-    /// `confirm_read_clipboard_cb` for anything that needs approval
-    /// (a program's OSC 52 read, or an unsafe multi-line paste). If we
-    /// passed `true` here we'd bypass that gate and let any process in
-    /// the shell silently exfiltrate the pasteboard. An empty
-    /// pasteboard completes with "" rather than stalling the request.
-    func provideClipboard(state: UnsafeMutableRawPointer?) {
-        guard let surface else { return }
-        let text = NSPasteboard.general.string(forType: .string) ?? ""
-        text.withCString {
-            ghostty_surface_complete_clipboard_request(surface, $0, state, false)
+    /// Read the shell's history in `format` through
+    /// `ghostty_surface_read_history`: up to `maxRows` rows of the primary
+    /// screen, down to the cursor row. Normalized like `readScreenText`.
+    public func readHistory(format: TerminalTextFormat, maxRows: Int) throws -> String {
+        guard let surface else { throw TerminalSurfaceError.notAttached }
+        guard maxRows > 0 else { return "" }
+        var textStruct = ghostty_text_s(
+            tl_px_x: 0,
+            tl_px_y: 0,
+            offset_start: 0,
+            offset_len: 0,
+            text: nil,
+            text_len: 0
+        )
+        guard ghostty_surface_read_history(
+            surface,
+            format.ghosttyFormat,
+            UInt32(clamping: maxRows),
+            &textStruct
+        ) else {
+            throw TerminalSurfaceError.captureFailed(
+                detail: "ghostty_surface_read_history returned false"
+            )
         }
+        defer { ghostty_surface_free_text(surface, &textStruct) }
+        return capturedText(textStruct)
     }
 
-    /// libghostty's confirmation gate for a clipboard read it deemed
-    /// unsafe/unauthorized (reached because `provideClipboard`
-    /// completes with `confirmed: false`).
+    // MARK: - Clipboard (driven by the runtime's clipboard callbacks)
+
+    /// Fulfil a libghostty clipboard *read* (⌘V, OSC 52, or a Kitty
+    /// clipboard read or listing): serve the requested `text/plain` from
+    /// the macOS pasteboard, and list it when the request asks what the
+    /// pasteboard holds.
+    ///
+    /// Completes with `confirmed: false` deliberately: that lets
+    /// libghostty apply its read/paste policy and call back into
+    /// `confirm_read_clipboard_cb` for anything that needs approval (a
+    /// program's read, or an unsafe multi-line paste). Confirming here
+    /// would bypass that gate and let any process in the shell silently
+    /// exfiltrate the pasteboard.
+    ///
+    /// Answers `UNAVAILABLE` when there's nothing to serve and no listing
+    /// was asked for, so libghostty resolves the request instead of
+    /// waiting on one that never completes.
+    func provideClipboard(
+        mimes: [String],
+        list: Bool,
+        state: UnsafeMutableRawPointer?
+    ) -> ghostty_clipboard_read_result_e {
+        guard let surface else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+        let text = NSPasteboard.general.string(forType: .string)
+        var contents: [ClipboardRepresentation] = []
+        if let text, mimes.contains(Self.textMime) {
+            contents.append(.init(mime: Self.textMime, data: Data(text.utf8)))
+        }
+        let available = list && text != nil ? [Self.textMime] : []
+        if contents.isEmpty, !list { return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE }
+        completeClipboardRequest(
+            surface,
+            ClipboardPayload(contents: contents, available: available),
+            state: state,
+            confirmed: false
+        )
+        return GHOSTTY_CLIPBOARD_READ_STARTED
+    }
+
+    /// libghostty's confirmation gate for a clipboard request its policy
+    /// won't allow unasked: a program's read or listing, a Kitty
+    /// clipboard write, or a paste it flagged.
     ///
     /// `PASTE` is a user-initiated ⌘V whose content libghostty flagged
-    /// (e.g. it spans multiple lines). The user asked for it, so
-    /// allow it without a second prompt. Anything else (OSC 52 read
-    /// from a program) requires explicit approval; on deny we resolve
-    /// the request with an empty string so the program gets nothing.
-    func confirmClipboardRead(
-        text: String,
+    /// (e.g. it spans multiple lines). The user asked for it, so allow
+    /// it without a second prompt. Anything else needs explicit approval.
+    /// Approval completes with the captured payload without rereading the
+    /// pasteboard, and denying tells libghostty, so the program gets a
+    /// refusal rather than an empty clipboard. A request with no payload is
+    /// denied outright.
+    ///
+    /// Kitty's "remember this program" grant isn't offered, and the
+    /// program-supplied name isn't shown, matching stock Ghostty's
+    /// prompt.
+    func confirmClipboardRequest(
+        _ payload: ClipboardPayload?,
         state: UnsafeMutableRawPointer?,
         request: ghostty_clipboard_request_e
     ) {
-        if request == GHOSTTY_CLIPBOARD_REQUEST_PASTE {
-            completeClipboardRead(text: text, state: state, confirmed: true)
+        guard let surface else { return }
+        guard let payload else {
+            ghostty_surface_deny_clipboard_request(surface, state)
             return
         }
+        if request == GHOSTTY_CLIPBOARD_REQUEST_PASTE {
+            completeClipboardRequest(surface, payload, state: state, confirmed: true)
+            return
+        }
+        let writes = request == GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE
+            || request == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE
         let stateBits = UInt(bitPattern: state)
         presentConfirmSheet(
-            message: "Allow clipboard read?",
-            info: "A program running in this terminal is trying to read "
-                + "the system clipboard."
+            message: writes ? "Allow clipboard change?" : "Allow clipboard read?",
+            info: writes
+                ? "A program running in this terminal is trying to change the system clipboard."
+                : "A program running in this terminal is trying to read the system clipboard."
         ) { [weak self] allowed in
-            self?.completeClipboardRead(
-                text: allowed ? text : "",
-                state: UnsafeMutableRawPointer(bitPattern: stateBits),
-                confirmed: true
-            )
+            guard let self, let surface = self.surface else { return }
+            let state = UnsafeMutableRawPointer(bitPattern: stateBits)
+            if allowed {
+                self.completeClipboardRequest(surface, payload, state: state, confirmed: true)
+            } else {
+                ghostty_surface_deny_clipboard_request(surface, state)
+            }
         }
     }
 
@@ -547,14 +643,60 @@ public final class GhosttyTerminalSurface: TerminalSurface {
         }
     }
 
-    private func completeClipboardRead(
-        text: String,
+    /// Hand `payload` to `ghostty_surface_complete_clipboard_request`,
+    /// copied into C memory that lives for the duration of the call.
+    private func completeClipboardRequest(
+        _ surface: ghostty_surface_t,
+        _ payload: ClipboardPayload,
         state: UnsafeMutableRawPointer?,
         confirmed: Bool
     ) {
-        guard let surface else { return }
-        text.withCString {
-            ghostty_surface_complete_clipboard_request(surface, $0, state, confirmed)
+        var cStrings: [UnsafeMutablePointer<CChar>] = []
+        var cDatas: [UnsafeMutableRawPointer] = []
+        defer {
+            cStrings.forEach { free($0) }
+            cDatas.forEach { $0.deallocate() }
+        }
+        var cContents: [ghostty_clipboard_content_s] = []
+        for entry in payload.contents {
+            guard let mime = strdup(entry.mime) else { continue }
+            cStrings.append(mime)
+            let buffer = UnsafeMutableRawPointer.allocate(
+                byteCount: max(entry.data.count, 1),
+                alignment: 1
+            )
+            cDatas.append(buffer)
+            entry.data.withUnsafeBytes { source in
+                if let base = source.baseAddress {
+                    buffer.copyMemory(from: base, byteCount: source.count)
+                }
+            }
+            cContents.append(
+                ghostty_clipboard_content_s(
+                    mime: mime,
+                    data: buffer.assumingMemoryBound(to: CChar.self),
+                    len: entry.data.count
+                )
+            )
+        }
+        var cAvailable: [UnsafePointer<CChar>?] = []
+        for mime in payload.available {
+            guard let copy = strdup(mime) else { continue }
+            cStrings.append(copy)
+            cAvailable.append(UnsafePointer(copy))
+        }
+        cContents.withUnsafeBufferPointer { contents in
+            cAvailable.withUnsafeBufferPointer { available in
+                var complete = ghostty_clipboard_complete_s(
+                    contents: contents.baseAddress,
+                    contents_len: contents.count,
+                    available: available.baseAddress,
+                    available_len: available.count,
+                    confirmed: confirmed,
+                    remember: false
+                )
+                ghostty_surface_complete_clipboard_request(surface, &complete, state)
+            }
         }
     }
 
@@ -743,6 +885,10 @@ public final class GhosttyTerminalSurface: TerminalSurface {
 
     func engineWantsBell() {
         delegate?.terminalSurfaceWantsBell(self)
+    }
+
+    func engineDidChangeSecureInput(_ active: Bool) {
+        isSecureInputActive = active
     }
 
     /// libghostty's scrollback geometry snapshot, emitted whenever

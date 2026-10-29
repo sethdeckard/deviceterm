@@ -41,15 +41,22 @@ struct WorkspaceSnapshotStore {
     /// under a checkout's `.build` directory, where `<checkout>` is a short
     /// digest of the checkout root.
     static func fileName(executablePath: String?) -> String {
-        guard let executablePath else { return "workspace.json" }
+        "workspace\(instanceSuffix(executablePath: executablePath)).json"
+    }
+
+    /// `""` for an installed app, or `-<checkout>` for an executable under a
+    /// checkout's `.build` directory. Every file the restore keeps carries
+    /// it, so one checkout's cleanup never touches another app's files.
+    static func instanceSuffix(executablePath: String?) -> String {
+        guard let executablePath else { return "" }
         let resolved = (executablePath as NSString).resolvingSymlinksInPath
-        guard let range = resolved.range(of: "/.build/") else { return "workspace.json" }
+        guard let range = resolved.range(of: "/.build/") else { return "" }
         let checkout = String(resolved[..<range.lowerBound])
         let digest = SHA256.hash(data: Data(checkout.utf8))
             .prefix(6)
             .map { String(format: "%02x", $0) }
             .joined()
-        return "workspace-\(digest).json"
+        return "-\(digest)"
     }
 
     /// The encoded form `write` puts on disk. Sorted keys, so an unchanged

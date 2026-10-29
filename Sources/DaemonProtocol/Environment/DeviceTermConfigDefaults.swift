@@ -91,6 +91,16 @@ public enum DeviceTermConfigDefaults {
                 + "quit. on restores the layout with a fresh shell in each terminal's "
                 + "last directory and reattaches device panes without booting anything; "
                 + "off opens one new window and records nothing."
+        ),
+        ConfigKeySpec(
+            key: "restore-scrollback",
+            defaultValue: "off",
+            allowedValues: ["off", "on"],
+            summary: "Whether a restored terminal shows the scrollback it had at quit, "
+                + "above a marker and a fresh prompt. on saves up to 10,000 rows per "
+                + "terminal at quit, with colors, skipping a terminal at a password "
+                + "prompt; off saves none and deletes what was saved. Needs "
+                + "restore-session = on."
         )
     ]
 

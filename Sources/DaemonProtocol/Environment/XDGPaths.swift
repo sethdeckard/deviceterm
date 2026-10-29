@@ -132,6 +132,18 @@ public enum XDGPaths {
             .appendingPathComponent("deviceterm/\(fileName)")
     }
 
+    /// Absolute path to `<state home>/deviceterm/<directoryName>`, where the
+    /// app keeps the terminal scrollback a restored layout replays. The
+    /// directory name is the caller's, for the same reason the snapshot's
+    /// file name is.
+    public static func deviceTermScrollback(
+        directoryName: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        (stateHome(environment: environment) as NSString)
+            .appendingPathComponent("deviceterm/\(directoryName)")
+    }
+
     /// Absolute path to the borrowed `<config home>/ghostty/config`.
     public static func ghosttyConfig(
         environment: [String: String] = ProcessInfo.processInfo.environment

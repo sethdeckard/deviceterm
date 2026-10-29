@@ -819,6 +819,11 @@ final class TabStripViewController: NSViewController, NSUserInterfaceValidations
         tabContentByID[tabID]?.workingDirectory(of: terminalID)
     }
 
+    /// A terminal's history to save for a restored layout.
+    func savedHistory(of terminalID: TerminalPaneID, inTab tabID: TabID, maxRows: Int) -> String? {
+        tabContentByID[tabID]?.savedHistory(of: terminalID, maxRows: maxRows)
+    }
+
     /// The name the user gave a tab, nil for the automatic title.
     func manualTitle(inTab tabID: TabID) -> String? {
         tabContentByID[tabID]?.manualTitle

@@ -63,11 +63,13 @@ struct WorkspaceSnapshot: Codable, Equatable, Sendable {
         var focusedLeaf: Int?
     }
 
-    /// A terminal leaf: where its shell was, and the name `pane rename` gave
-    /// it.
+    /// A terminal leaf: where its shell was, the name `pane rename` gave
+    /// it, and the id of its saved scrollback when `restore-scrollback` saved
+    /// some (see `ScrollbackStore`).
     struct Terminal: Codable, Equatable, Sendable {
         var cwd: String?
         var name: String?
+        var scrollback: String?
     }
 
     /// A simulator or physical-device leaf. `id` is the simulator's UDID or

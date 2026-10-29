@@ -266,6 +266,7 @@ their recognized keys are disjoint. The app ignores unknown DeviceTerm keys;
 | `welcome-messages` | `show`, `suppress` | `show` | Whether to show first-run welcome windows, which explain a DeviceTerm behavior once. `suppress` hides every welcome, including ones not yet seen; each stays reachable from the Help menu. |
 | `auto-update` | `off`, `check`, `download` | `check` | How the app handles updates via Sparkle. `check` checks automatically and notifies when an update is available; `download` also installs it on relaunch; `off` disables automatic checks (the Check for Updates… menu item still works). |
 | `restore-session` | `on`, `off` | `on` | Whether relaunching reopens the windows, tabs, and panes open at quit. `on` restores the layout with a fresh shell in each terminal's last directory and reattaches device panes without booting anything; `off` opens one new window and records nothing. |
+| `restore-scrollback` | `off`, `on` | `off` | Whether a restored terminal shows the scrollback it had at quit, above a marker and a fresh prompt. `on` saves up to 10,000 rows per terminal at quit, with colors, skipping a terminal at a password prompt; `off` saves none and deletes what was saved. Needs `restore-session = on`. |
 
 Most of these keys are written when the user ticks "Don't ask again" /
 "Don't show again" on the matching prompt; deleting one from the file
@@ -287,6 +288,13 @@ directory uses `workspace-<digest>.json` instead, named for that checkout,
 so `make run` and the installed app never reopen each other's windows.
 Delete the file while DeviceTerm isn't running and the next launch opens one
 new window.
+
+Scrollback saved under `restore-scrollback` sits beside it, one file per
+terminal in `$XDG_STATE_HOME/deviceterm/scrollback` (`scrollback-<digest>` for
+a checkout build, matching the workspace file). It holds whatever those
+terminals printed, so the directory is created `0700` and each file `0600`.
+At quit, cleanup removes scrollback files not referenced by the final
+snapshot.
 
 Which welcomes have already appeared is not a preference and is not kept
 here. It lives in `$XDG_CACHE_HOME/deviceterm/welcome-seen` (or
@@ -412,7 +420,7 @@ prebuilt SwiftPM binary package, [`libghostty-spm`][lg], pinned in
 ```swift
 .package(
     url: "https://github.com/sethdeckard/libghostty-spm.git",
-    exact: "0.1.0"
+    exact: "0.4.0"
 )
 ```
 

@@ -60,6 +60,11 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
     /// caller can send argv-style; the CLI sends a single string in
     /// a length-1 array.
     let command: [String]?
+    /// Startup-only output shown above the shell's first prompt: a restored
+    /// terminal's saved scrollback, already shaped by `ScrollbackReplay`
+    /// (libghostty's `initial_output`). Same lifecycle as `cwd`: consumed at
+    /// attach, not re-read on reconcile.
+    let restoredOutput: String?
 
     init(
         id: TerminalPaneID,
@@ -68,7 +73,8 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
         shortId: String? = nil,
         name: String? = nil,
         cwd: String? = nil,
-        command: [String]? = nil
+        command: [String]? = nil,
+        restoredOutput: String? = nil
     ) {
         self.id = id
         self.sessionId = PublicIdentifier.canonicalized(sessionId)
@@ -78,5 +84,6 @@ struct TerminalPaneState: Identifiable, Equatable, Sendable {
         self.sessionName = name
         self.cwd = cwd
         self.command = command
+        self.restoredOutput = restoredOutput
     }
 }

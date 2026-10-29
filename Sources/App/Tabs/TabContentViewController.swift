@@ -234,7 +234,8 @@ final class TabContentViewController: NSViewController {
             terminalID: primary.id,
             environment: primaryEnv.shellEnvironment(),
             cwd: primary.cwd,
-            command: primary.command
+            command: primary.command,
+            restoredOutput: primary.restoredOutput
         )
         primaryVC.tabID = tabID
         // The tab strip owns the title; name and shortId feed
@@ -603,6 +604,12 @@ final class TabContentViewController: NSViewController {
 
     func focusedPane() -> PaneSlot? { splitVC.focusedSlot() }
 
+    /// A terminal's history to save for a restored layout. See
+    /// `TerminalPaneViewController.savedHistory(maxRows:)`.
+    func savedHistory(of terminalID: TerminalPaneID, maxRows: Int) -> String? {
+        terminalVCByID[terminalID]?.savedHistory(maxRows: maxRows)
+    }
+
     /// Where a terminal's shell is now, for the saved layout: the directory
     /// its shell last reported (OSC 7), else the one the kernel reports for
     /// what the terminal is running.
@@ -770,7 +777,8 @@ final class TabContentViewController: NSViewController {
                     terminalID: terminal.id,
                     environment: env.shellEnvironment(),
                     cwd: terminal.cwd,
-                    command: terminal.command
+                    command: terminal.command,
+                    restoredOutput: terminal.restoredOutput
                 )
                 terminalVC.tabID = tabID
                 // Minimal terminal chrome no longer shows a title;

@@ -355,6 +355,22 @@ it stops writing. It can't tell a crash from a quit. After the last window
 closes, if the empty workspace is saved before a crash, the next launch opens
 one new window; otherwise, it restores the previous snapshot.
 
+`restore-scrollback` adds terminal contents, saved at quit only, because
+reading a terminal's whole history is too expensive for the periodic save. The
+capture reads the primary screen through libghostty's
+`ghostty_surface_read_history`, so an editor or pager open at quit doesn't
+stand in for the shell's history, and a terminal whose engine reports a
+password prompt (termios echo off) is skipped. Each terminal's history goes to
+its own `0600` file, and the layout records only the file's random UUID.
+
+Both halves are treated as untrusted on the way back in. An id that isn't a
+UUID names no file, and a file over 16 MiB isn't read. The text reaches the new
+terminal through libghostty's `initial_output`, which keeps printable text, CR,
+LF, tab, and SGR and discards every other control and escape sequence before
+parsing. Replayed history therefore can't answer queries into the new shell,
+retitle it, or touch the clipboard, and it can't block surface creation on
+worker queues that aren't running yet.
+
 A build run from a checkout's `.build` directory keeps its own
 `workspace-<digest>.json`, so development builds and the installed app don't
 reopen each other's layouts.

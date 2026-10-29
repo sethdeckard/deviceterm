@@ -37,7 +37,15 @@ enum Route: Sendable {
     /// which case it claims it, as re-attaching does. Those records' other
     /// sims mount as `openWindow` mounts them. A layout that yields no tab
     /// opens one new window instead.
-    case restoreWorkspace(WorkspaceSnapshot, reattach: [OrphanRecord] = [])
+    ///
+    /// `scrollback` maps a terminal leaf's scrollback id to the output its
+    /// new shell shows above the first prompt (see `ScrollbackReplay`). The
+    /// caller loads it; the Router reads no files.
+    case restoreWorkspace(
+        WorkspaceSnapshot,
+        scrollback: [String: String] = [:],
+        reattach: [OrphanRecord] = []
+    )
     /// Close every tab in the window then drop it. `mode` is `.detach`
     /// (sims keep running) or `.shutdown` (sims stop + scratch dirs are
     /// cleaned); the quit path uses the user-chosen mode here.

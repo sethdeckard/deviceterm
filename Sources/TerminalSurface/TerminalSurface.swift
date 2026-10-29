@@ -41,6 +41,11 @@ public protocol TerminalSurface: AnyObject {
     /// available yet, don't render."
     var cellSize: CGSize { get }
 
+    /// Whether the engine reports a password prompt on screen (termios
+    /// echo off). Hosts that save terminal contents use it to leave such a
+    /// terminal out.
+    var isSecureInputActive: Bool { get }
+
     /// Spawn the shell described by `command` and begin rendering.
     /// Single-shot: throws `.alreadyAttached` if called twice. Throws
     /// `.surfaceCreationFailed` if the engine can't create a surface.
@@ -87,9 +92,20 @@ public protocol TerminalSurface: AnyObject {
     /// `TerminalSurfaceError.notAttached` before `attach` has
     /// completed, or `.captureFailed` when the engine refuses the
     /// read (rare; usually means the surface is mid-resize).
-    /// Captures the visible viewport only; there is no scrollback
-    /// or line-count option.
+    /// Captures the visible viewport only; `readHistory` reads
+    /// scrollback.
     func readScreenText(format: TerminalTextFormat) throws -> String
+
+    /// The shell's history in `format`: up to the last `maxRows` rows of the
+    /// primary screen, from scrollback down to the cursor row. Reads the
+    /// primary screen even while a full-screen program (an editor, a pager)
+    /// has the alternate one up, so what comes back is the shell's history
+    /// rather than that program's screen. Rows below the cursor are left
+    /// out, even if they hold text. Rows are separated by `"\n"` in both
+    /// formats. Throws `TerminalSurfaceError.notAttached` before `attach`
+    /// has completed, or `.captureFailed` when the engine refuses the read.
+    /// An expensive read; call it rarely.
+    func readHistory(format: TerminalTextFormat, maxRows: Int) throws -> String
 
     /// Copy the current selection to the system clipboard. No-op if
     /// nothing is selected. Best-effort: implementations log on

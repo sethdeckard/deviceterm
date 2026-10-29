@@ -425,8 +425,8 @@ final class Router {
                 command: command
             )
 
-        case let .restoreWorkspace(snapshot, reattach):
-            await restoreWorkspace(snapshot, reattach: reattach)
+        case let .restoreWorkspace(snapshot, scrollback, reattach):
+            await restoreWorkspace(snapshot, scrollback: scrollback, reattach: reattach)
 
         case let .closeWindow(windowID, mode, authorizedTerminals):
             // Reserved synchronously in `dispatch`; always release it, even on
@@ -1158,7 +1158,11 @@ final class Router {
     /// Each window joins the workspace before its tabs are built, as
     /// `openWindow` does, because a restored placeholder's attach runs off
     /// the drain and finds its tab through the workspace.
-    private func restoreWorkspace(_ snapshot: WorkspaceSnapshot, reattach: [OrphanRecord]) async {
+    private func restoreWorkspace(
+        _ snapshot: WorkspaceSnapshot,
+        scrollback: [String: String],
+        reattach: [OrphanRecord]
+    ) async {
         let reclaimed = Set(
             reattach.flatMap(\.liveSims).map { PublicIdentifier.canonicalized($0.udid) }
         )
@@ -1174,7 +1178,12 @@ final class Router {
             workspace.addWindow(window)
             var selectedTabID: TabID?
             for (tabIndex, tab) in saved.tabs.enumerated() {
-                guard let restored = await restoreTab(tab, into: window, reclaimed: reclaimed) else {
+                guard let restored = await restoreTab(
+                    tab,
+                    into: window,
+                    reclaimed: reclaimed,
+                    scrollback: scrollback
+                ) else {
                     continue
                 }
                 shown.formUnion(restored.targets)
@@ -1215,7 +1224,8 @@ final class Router {
     private func restoreTab(
         _ saved: WorkspaceSnapshot.Tab,
         into window: WindowState,
-        reclaimed: Set<String>
+        reclaimed: Set<String>,
+        scrollback: [String: String]
     ) async -> (id: TabID, targets: [PaneTarget])? {
         let sanitized = WorkspaceRestoreLayout.sanitized(saved.layout)
         guard var layout = sanitized.node, WorkspaceRestoreLayout.hasTerminal(layout) else {
@@ -1288,7 +1298,8 @@ final class Router {
                     capability: session.capability,
                     shortId: session.shortId,
                     name: session.name,
-                    cwd: WorkspaceRestoreLayout.restorableDirectory(terminal.cwd)
+                    cwd: WorkspaceRestoreLayout.restorableDirectory(terminal.cwd),
+                    restoredOutput: terminal.scrollback.flatMap { scrollback[$0] }
                 )
                 terminals.append(pane)
                 slot = .terminal(pane.id)

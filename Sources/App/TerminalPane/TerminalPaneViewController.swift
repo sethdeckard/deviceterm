@@ -80,6 +80,10 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
     /// shape as if the user had typed it themselves. Maps to
     /// libghostty's `config.initial_input`.
     private let command: [String]?
+    /// One-shot output shown above the shell's first prompt: a restored
+    /// terminal's saved scrollback. Maps to libghostty's
+    /// `config.initial_output`.
+    private let restoredOutput: String?
 
     /// Fired when the shell exits (libghostty child-exited). The
     /// container decides what closing means (close tab / window).
@@ -156,12 +160,14 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
         terminalID: TerminalPaneID,
         environment: [String: String],
         cwd: String? = nil,
-        command: [String]? = nil
+        command: [String]? = nil,
+        restoredOutput: String? = nil
     ) {
         self.terminalID = terminalID
         self.environment = environment
         self.cwd = cwd
         self.command = command
+        self.restoredOutput = restoredOutput
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -321,7 +327,8 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
                 command: .loginShell(
                     environment: shellEnvironmentWithTerminfo(),
                     workingDirectory: cwd,
-                    initialInput: initialInput
+                    initialInput: initialInput,
+                    initialOutput: restoredOutput
                 )
             )
         } catch {
@@ -532,6 +539,15 @@ final class TerminalPaneViewController: NSViewController, TerminalSurfaceDelegat
             throw TerminalSurfaceError.notAttached
         }
         return try surface.readScreenText(format: format)
+    }
+
+    /// The shell's history to save for a restored layout: up to `maxRows`
+    /// styled rows. Nil while a password prompt is on screen, when the
+    /// terminal never attached (this doesn't load the view, which would
+    /// spawn a shell), or when the read fails.
+    func savedHistory(maxRows: Int) -> String? {
+        guard let surface, !surface.isSecureInputActive else { return nil }
+        return try? surface.readHistory(format: .ansi, maxRows: maxRows)
     }
 
     /// This terminal's live label, tty, working directory, and foreground

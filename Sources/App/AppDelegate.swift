@@ -360,6 +360,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Records the layout for the next launch to restore. Nil under `--smoke`,
     /// when `restore-session` is off, and until the launch's windows are open.
     private var snapshotWriter: WorkspaceSnapshotWriter?
+    /// Scrollback saved at quit, by terminal, for the final snapshot to
+    /// record. Empty until then, so the periodic snapshots record none.
+    private var savedScrollback: [TerminalPaneID: String] = [:]
     /// Observation that re-supplies the daemon's inventory when the live session
     /// set changes (see `markInventoryDirtyIfChanged`). Non-smoke only.
     private var inventoryObservation: ObservationToken?
@@ -585,9 +588,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                             let restoring = SessionRestorePolicy.resolve(
                                 ConfigFile().value(forKey: SessionRestorePolicy.configKey)
                             ) == .on
+                            let replaying = restoring && ScrollbackRestorePolicy.resolve(
+                                ConfigFile().value(forKey: ScrollbackRestorePolicy.configKey)
+                            ) == .on
+                            // Turning the key off deletes what was saved.
+                            if !replaying { ScrollbackStore().removeDirectory() }
                             if restoring, let snapshot = WorkspaceSnapshotStore().read() {
+                                let scrollback = replaying
+                                    ? ScrollbackStore().replayOutputs(for: snapshot)
+                                    : [:]
                                 await self.router.dispatchAndWait(
-                                    .restoreWorkspace(snapshot, reattach: orphansToReattach)
+                                    .restoreWorkspace(
+                                        snapshot,
+                                        scrollback: scrollback,
+                                        reattach: orphansToReattach
+                                    )
                                 )
                                 self.bringRestoredWindowForward()
                             } else {
@@ -1163,7 +1178,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard saved.windows.count == 1, saved.windows.first?.tabs.first?.title == "smoke" else {
             smokeFail("workspace snapshot did not record the split, named tab")
         }
-        await router.dispatchAndWait(.restoreWorkspace(saved))
+        // Capture reads the live terminal's history (its prompt, at least).
+        let captured = await pollState(timeoutSeconds: 5) { [weak self] in
+            guard let self, let terminal = workspace.window(id: windowID)?.tabs.tab(id: tabID)?.terminals.first,
+                let history = strip(for: windowID)?.savedHistory(of: terminal.id, inTab: tabID, maxRows: 50)
+            else { return false }
+            return ScrollbackReplay.output(from: history) != nil
+        }
+        guard captured else { smokeFail("saved history read nothing from a live terminal") }
+        // Replay: the restored primary terminal shows a known line above its
+        // prompt, through libghostty's initial_output, and reads it back.
+        var replayed = saved
+        replayed.windows[0].tabs[0].layout = markingFirstTerminal(
+            saved.windows[0].tabs[0].layout,
+            scrollback: "smoke-scrollback"
+        )
+        let replayOutput = ScrollbackReplay.output(from: "smoke restored line") ?? ""
+        await router.dispatchAndWait(
+            .restoreWorkspace(replayed, scrollback: ["smoke-scrollback": replayOutput])
+        )
         guard await waitForWindowCount(2, timeoutSeconds: 8),
             let restored = workspace.windows.last, restored.id != windowID else {
             smokeFail("restoreWorkspace did not open a window")
@@ -1178,10 +1211,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 && strip(for: restored.id)?.manualTitle(inTab: tab.id) == "smoke"
         }
         guard shapeMatches else { smokeFail("restored window does not match the saved layout") }
+        let replayShown = await pollState(timeoutSeconds: 5) { [weak self] in
+            guard let self, let tab = restored.tabs.tabs.first,
+                let history = strip(for: restored.id)?.savedHistory(
+                    of: tab.primaryTerminal.id,
+                    inTab: tab.id,
+                    maxRows: 50
+                ) else { return false }
+            return history.contains("smoke restored line") && history.contains("[restored scrollback]")
+        }
+        guard replayShown else { smokeFail("restored terminal did not show its replayed scrollback") }
         router.dispatch(.closeWindow(restored.id, mode: .detach))
         guard await waitForWindowCount(1, timeoutSeconds: 5) else {
             smokeFail("closing the restored window did not drop to 1 window")
         }
+    }
+
+    /// `node` with `scrollback` recorded on its first terminal leaf.
+    private func markingFirstTerminal(
+        _ node: WorkspaceSnapshot.Node,
+        scrollback: String
+    ) -> WorkspaceSnapshot.Node {
+        var marked = false
+        func mark(_ node: WorkspaceSnapshot.Node) -> WorkspaceSnapshot.Node {
+            switch node {
+            case var .terminal(terminal) where !marked:
+                marked = true
+                terminal.scrollback = scrollback
+                return .terminal(terminal)
+
+            case let .split(axis, children, ratios):
+                return .split(axis: axis, children: children.map(mark), ratios: ratios)
+
+            default:
+                return node
+            }
+        }
+        return mark(node)
     }
 
     /// A tree's split axes in walk order, which compares two trees' shape
@@ -1301,7 +1367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         daemonClient.onUnresponsive = nil
         // Before any window closes: the teardown below empties the workspace,
         // and the layout to restore is the one the user quit with.
-        snapshotWriter?.saveFinal()
+        saveLayoutForQuit()
         let liveIDs = workspace.windows.map(\.id)
         if liveIDs.isEmpty { return .terminateNow }
         Task { @MainActor in
@@ -2068,9 +2134,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 },
                 manualTitle: { [weak self] tabID in
                     self?.strip(containing: tabID)?.manualTitle(inTab: tabID)
-                }
+                },
+                scrollback: { [weak self] _, terminalID in self?.savedScrollback[terminalID] }
             )
         )
+    }
+
+    /// The final snapshot at quit, with each terminal's scrollback saved
+    /// first when `restore-scrollback` is on. Afterwards only the scrollback
+    /// that snapshot names is kept; with the key off, none is.
+    private func saveLayoutForQuit() {
+        guard let writer = snapshotWriter else { return }
+        let store = ScrollbackStore()
+        guard ScrollbackRestorePolicy.resolve(
+            ConfigFile().value(forKey: ScrollbackRestorePolicy.configKey)
+        ) == .on else {
+            writer.saveFinal()
+            store.removeDirectory()
+            return
+        }
+        savedScrollback = saveScrollback(into: store)
+        writer.saveFinal()
+        store.removeAll(except: Set(savedScrollback.values))
+    }
+
+    /// Save every restorable terminal's history to `store`, by terminal.
+    /// Automation tabs aren't restored, so theirs aren't saved; a terminal at
+    /// a password prompt, or with nothing to show, saves nothing.
+    private func saveScrollback(into store: ScrollbackStore) -> [TerminalPaneID: String] {
+        var saved: [TerminalPaneID: String] = [:]
+        for window in workspace.windows {
+            for tab in window.tabs.tabs where tab.role != .automation {
+                for terminal in tab.terminals {
+                    guard let history = strip(for: window.id)?.savedHistory(
+                        of: terminal.id,
+                        inTab: tab.id,
+                        maxRows: ScrollbackStore.maxRows
+                    ), ScrollbackReplay.output(from: history) != nil,
+                        let id = store.write(history) else { continue }
+                    saved[terminal.id] = id
+                }
+            }
+        }
+        return saved
     }
 
     /// The tab strip of the window holding `tabID`.

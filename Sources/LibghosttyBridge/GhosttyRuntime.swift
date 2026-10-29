@@ -234,6 +234,26 @@ private func ghosttyAction(
         }
         return true
 
+    case GHOSTTY_ACTION_SECURE_INPUT:
+        // Termios password detection sends `.on` when a prompt turns echo
+        // off and `.off` when it's gone; the surface records it so a
+        // terminal waiting at a password prompt stays out of saved
+        // scrollback. The `toggle_secure_input` binding's `.toggle` isn't
+        // recorded. macOS Secure Keyboard Entry isn't turned on either way,
+        // so the action still goes unhandled and reports like any other.
+        switch action.action.secure_input {
+        case GHOSTTY_SECURE_INPUT_ON:
+            MainActor.assumeIsolated { owner.engineDidChangeSecureInput(true) }
+
+        case GHOSTTY_SECURE_INPUT_OFF:
+            MainActor.assumeIsolated { owner.engineDidChangeSecureInput(false) }
+
+        default:
+            break
+        }
+        reportUnhandledAction(action)
+        return false
+
     case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
         // The child process is gone. Answering true suppresses the
         // "Process exited. Press any key to close the terminal." line
@@ -313,42 +333,82 @@ private func reportUnhandledAction(_ action: ghostty_action_s) {
 private func ghosttyReadClipboard(
     _ userdata: UnsafeMutableRawPointer?,
     _ location: ghostty_clipboard_e,
-    _ state: UnsafeMutableRawPointer?
-) -> Bool {
+    _ state: UnsafeMutableRawPointer?,
+    _ mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ mimeCount: Int,
+    _ list: Bool
+) -> ghostty_clipboard_read_result_e {
     // Only the standard pasteboard: there's no X11-style selection
     // clipboard on macOS (supports_selection_clipboard is false).
-    guard let userdata, location == GHOSTTY_CLIPBOARD_STANDARD else { return false }
+    guard let userdata, location == GHOSTTY_CLIPBOARD_STANDARD else {
+        return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
+    }
     let owner = Unmanaged<GhosttyTerminalSurface>
         .fromOpaque(userdata).takeUnretainedValue()
+    // The MIME strings are only valid for the call, so copy them now.
+    // libghostty has already folded text aliases into "text/plain".
+    var requested: [String] = []
+    if let mimes {
+        for index in 0..<mimeCount {
+            if let mime = mimes[index] { requested.append(String(cString: mime)) }
+        }
+    }
     // `state` is a non-Sendable raw pointer; pass it through the
     // (synchronous) main-actor closure as a bit pattern to satisfy
     // strict concurrency without changing the value.
     let stateBits = UInt(bitPattern: state)
-    MainActor.assumeIsolated {
-        owner.provideClipboard(state: UnsafeMutableRawPointer(bitPattern: stateBits))
+    return MainActor.assumeIsolated {
+        owner.provideClipboard(
+            mimes: requested,
+            list: list,
+            state: UnsafeMutableRawPointer(bitPattern: stateBits)
+        )
     }
-    return true
 }
 
-// libghostty's confirmation gate, invoked when a read completed with
-// `confirmed: false` needs user approval (program OSC 52 read, or an
-// unsafe paste). Without handling this, such reads would silently
-// stall; auto-confirming them (passing `true` from the read callback)
-// would instead let any program read the pasteboard unprompted.
+// libghostty's confirmation gate, invoked when a request needs user
+// approval: a program's OSC 52 or Kitty clipboard read, a Kitty
+// clipboard write (whose contents arrive here, and reach the write
+// callback only once approved), or an unsafe paste. Without handling
+// this, such requests would silently stall.
 private func ghosttyConfirmReadClipboard(
     _ userdata: UnsafeMutableRawPointer?,
-    _ string: UnsafePointer<CChar>?,
+    _ confirm: UnsafePointer<ghostty_clipboard_confirm_s>?,
     _ state: UnsafeMutableRawPointer?,
     _ request: ghostty_clipboard_request_e
 ) {
-    guard let userdata, let string else { return }
+    guard let userdata else { return }
     let owner = Unmanaged<GhosttyTerminalSurface>
         .fromOpaque(userdata).takeUnretainedValue()
-    let text = String(cString: string)
+    // Copy the borrowed C representations: the prompt is asynchronous.
+    // Approval completes with the captured payload without rereading the
+    // pasteboard.
+    var contents: [GhosttyTerminalSurface.ClipboardRepresentation] = []
+    var available: [String] = []
+    if let payload = confirm?.pointee {
+        if let entries = payload.contents {
+            for index in 0..<payload.contents_len {
+                let entry = entries[index]
+                guard let mime = entry.mime else { continue }
+                let data = entry.len > 0 && entry.data != nil
+                    ? Data(bytes: entry.data, count: entry.len)
+                    : Data()
+                contents.append(.init(mime: String(cString: mime), data: data))
+            }
+        }
+        if let mimes = payload.available {
+            for index in 0..<payload.available_len {
+                if let mime = mimes[index] { available.append(String(cString: mime)) }
+            }
+        }
+    }
     let stateBits = UInt(bitPattern: state)
+    let hasPayload = confirm != nil
     MainActor.assumeIsolated {
-        owner.confirmClipboardRead(
-            text: text,
+        owner.confirmClipboardRequest(
+            hasPayload
+                ? GhosttyTerminalSurface.ClipboardPayload(contents: contents, available: available)
+                : nil,
             state: UnsafeMutableRawPointer(bitPattern: stateBits),
             request: request
         )
@@ -364,19 +424,23 @@ private func ghosttyWriteClipboard(
 ) {
     guard let userdata, location == GHOSTTY_CLIPBOARD_STANDARD,
         let content, count > 0 else { return }
-    // Prefer a text/plain entry; otherwise take the first entry with
-    // data. The C strings are only valid for the call, so copy now.
+    // Only a text/plain entry is written: this pasteboard holds text, and a
+    // Kitty clipboard write can carry other types (an image), whose bytes
+    // would land on the pasteboard as garbage text. The data is
+    // length-delimited and not necessarily NUL-terminated, so exactly `len`
+    // bytes are decoded, copied because they're only valid for the call.
+    // Text that isn't valid UTF-8 writes nothing.
     var picked: String?
     for index in 0..<count {
         let entry = content[index]
-        guard let dataPtr = entry.data else { continue }
-        let value = String(cString: dataPtr)
-        if let mimePtr = entry.mime,
-            String(cString: mimePtr).hasPrefix("text/plain") {
-            picked = value
+        guard let mimePtr = entry.mime,
+            String(cString: mimePtr).hasPrefix("text/plain") else { continue }
+        guard let dataPtr = entry.data else {
+            picked = ""
             break
         }
-        if picked == nil { picked = value }
+        picked = String(bytes: UnsafeRawBufferPointer(start: dataPtr, count: entry.len), encoding: .utf8)
+        break
     }
     guard let text = picked else { return }
     let owner = Unmanaged<GhosttyTerminalSurface>

@@ -25,6 +25,8 @@ enum WorkspaceSnapshotBuilder {
         var workingDirectory: @MainActor (TabID, TerminalPaneID) -> String?
         /// The name the user gave a tab, nil for the automatic title.
         var manualTitle: @MainActor (TabID) -> String?
+        /// The id of a terminal's saved scrollback, nil when none was saved.
+        var scrollback: @MainActor (TabID, TerminalPaneID) -> String? = { _, _ in nil }
     }
 
     static func build(workspace: WorkspaceViewModel, sources: Sources) -> WorkspaceSnapshot {
@@ -122,7 +124,8 @@ enum WorkspaceSnapshotBuilder {
             return .terminal(
                 WorkspaceSnapshot.Terminal(
                     cwd: sources.workingDirectory(tab.id, id) ?? terminal.cwd,
-                    name: terminal.name
+                    name: terminal.name,
+                    scrollback: sources.scrollback(tab.id, id)
                 )
             )
 

@@ -359,6 +359,15 @@ Simulator and device panes reattach in their slots. A Simulator that's shut
 down comes back as a placeholder with a Boot button, because a relaunch never
 boots anything.
 
+Set `restore-scrollback = on` and each restored terminal also shows the
+scrollback it had at quit, in color, above a dim `[restored scrollback]` line
+and its fresh prompt. Up to 10,000 rows per terminal are kept. Nothing that was
+running comes back with it.
+
+Scrollback is saved only when you quit, so after a crash the layout comes back
+without it. A terminal waiting at a password prompt when you quit saves none.
+Turning the key off deletes what was saved.
+
 A restored Simulator pane doesn't make DeviceTerm the Simulator's owner.
 Close Tab and Shut Down All & Quit leave a borrowed Simulator running while it
 remains unowned by DeviceTerm. Retrying its attachment or reattaching after a

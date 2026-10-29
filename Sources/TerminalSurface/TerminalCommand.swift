@@ -30,19 +30,28 @@ public struct TerminalCommand: Sendable, Equatable {
     /// (rather than `executable = "$SHELL -c foo"` semantics, which
     /// would exit the pane the moment `foo` returns).
     public var initialInput: String?
+    /// Text shown as terminal output before the shell starts, so it sits
+    /// above the shell's first prompt. Maps to libghostty's
+    /// `config.initial_output`, which keeps only printable text, CR, LF,
+    /// tab, and SGR and discards every other control and escape sequence.
+    /// Used to replay a terminal's saved scrollback when a layout is
+    /// restored.
+    public var initialOutput: String?
 
     public init(
         executable: String,
         arguments: [String] = [],
         environment: [String: String] = [:],
         workingDirectory: String? = nil,
-        initialInput: String? = nil
+        initialInput: String? = nil,
+        initialOutput: String? = nil
     ) {
         self.executable = executable
         self.arguments = arguments
         self.environment = environment
         self.workingDirectory = workingDirectory
         self.initialInput = initialInput
+        self.initialOutput = initialOutput
     }
 
     /// A login shell: `$SHELL -l`, falling back to `/bin/zsh` when
@@ -52,7 +61,8 @@ public struct TerminalCommand: Sendable, Equatable {
     public static func loginShell(
         environment: [String: String] = [:],
         workingDirectory: String? = nil,
-        initialInput: String? = nil
+        initialInput: String? = nil,
+        initialOutput: String? = nil
     ) -> TerminalCommand {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         return TerminalCommand(
@@ -60,7 +70,8 @@ public struct TerminalCommand: Sendable, Equatable {
             arguments: ["-l"],
             environment: environment,
             workingDirectory: workingDirectory,
-            initialInput: initialInput
+            initialInput: initialInput,
+            initialOutput: initialOutput
         )
     }
 }
