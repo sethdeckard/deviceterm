@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 @testable import App
+import CoreServices
 import Foundation
 import Testing
 
@@ -94,7 +95,11 @@ func quitWithSimsHonorsPersistentKeepDefault() throws {
     let fixture = try makeFixture(contents: "quit-with-sims-default = keep\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.quitWithSims(config: fixture.config, state: fixture.state) == .keepSims
+        CloseDecisions.quitWithSims(
+            config: fixture.config,
+            state: fixture.state,
+            isSystemQuit: false
+        ) == .keepSims
     )
 }
 
@@ -104,8 +109,60 @@ func quitWithSimsHonorsPersistentShutdownDefault() throws {
     let fixture = try makeFixture(contents: "quit-with-sims-default = shutdown\n")
     defer { cleanup(fixture.path) }
     #expect(
-        CloseDecisions.quitWithSims(config: fixture.config, state: fixture.state) == .shutdownSims
+        CloseDecisions.quitWithSims(
+            config: fixture.config,
+            state: fixture.state,
+            isSystemQuit: false
+        ) == .shutdownSims
     )
+}
+
+@MainActor
+@Test
+func systemQuitKeepsSimsWithoutAsking() throws {
+    // No stored answer, so a user quit would present the alert; a system
+    // quit must return before it, or this headless call would block.
+    let fixture = try makeFixture(contents: "")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.quitWithSims(
+            config: fixture.config,
+            state: fixture.state,
+            isSystemQuit: true
+        ) == .keepSims
+    )
+}
+
+@MainActor
+@Test
+func systemQuitStillHonorsPersistentShutdownDefault() throws {
+    let fixture = try makeFixture(contents: "quit-with-sims-default = shutdown\n")
+    defer { cleanup(fixture.path) }
+    #expect(
+        CloseDecisions.quitWithSims(
+            config: fixture.config,
+            state: fixture.state,
+            isSystemQuit: true
+        ) == .shutdownSims
+    )
+}
+
+@Test("system quit reasons", arguments: [
+    (OSType(kAEShutDown), true),
+    (OSType(kAERestart), true),
+    (OSType(kAEReallyLogOut), true),
+    (OSType(kAELogOut), true),
+    (OSType(kAEQuitAll), false),
+    (OSType(0x6E6F_7065), false)
+])
+func classifiesQuitReason(reason: OSType, isSystem: Bool) {
+    #expect(SystemQuitDecision.isSystemQuit(reason: reason, powerOffNotified: false) == isSystem)
+}
+
+@Test
+func powerOffNotificationAloneMeansSystemQuit() {
+    #expect(SystemQuitDecision.isSystemQuit(reason: nil, powerOffNotified: true))
+    #expect(!SystemQuitDecision.isSystemQuit(reason: nil, powerOffNotified: false))
 }
 
 @MainActor

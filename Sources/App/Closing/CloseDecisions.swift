@@ -161,13 +161,19 @@ enum CloseDecisions {
         )
     }
 
+    /// `isSystemQuit` is a restart, shutdown, or log out (see
+    /// `SystemQuitDecision`). The prompt is skipped then so it can't block
+    /// system termination: a stored answer still applies, and otherwise the
+    /// sims keep running, the prompt's default.
     static func quitWithSims(
         config: ConfigFile,
-        state: CloseSuppressionState
+        state: CloseSuppressionState,
+        isSystemQuit: Bool
     ) -> QuitDecision {
         if let pinned = state.lookupQuit(config: config) {
             return pinned
         }
+        if isSystemQuit { return .keepSims }
         let alert = NSAlert()
         alert.messageText = "Quit DeviceTerm?"
         alert.informativeText =

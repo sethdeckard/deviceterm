@@ -3779,7 +3779,10 @@ requesting frames while the pane is visible.
   Sims**, or **Cancel**. A tab owning no booted sim closes silently in
   detach mode.
 - ⌘Q with running sims → app-modal alert: **Keep Running** (default) or
-  **Shut Down All & Quit**.
+  **Shut Down All & Quit**. A restart, shutdown, or log out skips the alert
+  and keeps the sims running unless `quit-with-sims-default` says otherwise.
+  `SystemQuitDecision` recognizes one from the quit Apple Event's
+  `kAEQuitReason`, or from an earlier `NSWorkspace.willPowerOffNotification`.
 - **CLI scope:** the `DEVICETERM_SESSION` env var inside a terminal
   pane's shell scopes `deviceterm` commands to that pane's session.
   `deviceterm pane list` reads every caller-visible terminal, Simulator, and

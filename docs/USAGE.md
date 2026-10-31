@@ -344,6 +344,10 @@ This check covers the daemon's complete owned roster. A detached or unlinked
 Simulator can trigger the prompt even when the remaining window has no device
 panes.
 
+Restarting, shutting down, or logging out doesn't show the prompt, so it can't
+hold up the restart. A `quit-with-sims-default` you've set still applies.
+Otherwise the Simulators are left running, as Keep Running would leave them.
+
 Closing the last window does not quit DeviceTerm. If no windows remain when you
 quit, DeviceTerm exits without presenting another window-scoped Simulator
 prompt. Detached Simulators continue running.

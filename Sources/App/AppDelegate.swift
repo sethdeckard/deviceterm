@@ -363,6 +363,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Scrollback saved at quit, by terminal, for the final snapshot to
     /// record. Empty until then, so the periodic snapshots record none.
     private var savedScrollback: [TerminalPaneID: String] = [:]
+    /// Set once macOS posts `willPowerOffNotification` (log out, restart, or
+    /// shutdown), so the quit that follows is treated as a system quit. A
+    /// cancelled log out leaves it set; a later quit skips the prompt,
+    /// honoring the stored preference or keeping sims running when none
+    /// exists.
+    private var powerOffNotified = false
+    private var powerOffObserver: (any NSObjectProtocol)?
     /// Observation that re-supplies the daemon's inventory when the live session
     /// set changes (see `markInventoryDirtyIfChanged`). Non-smoke only.
     private var inventoryObservation: ObservationToken?
@@ -411,6 +418,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 + "without GPU passthrough.)"
             )
             return
+        }
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification,
+            object: nil,
+            queue: .main
+        ) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.powerOffNotified = true
+            }
         }
         // Start Sparkle auto-update, driven by the `auto-update` config.
         // Skipped under `--smoke` so the hermetic gate never reaches the
@@ -1368,6 +1384,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Before any window closes: the teardown below empties the workspace,
         // and the layout to restore is the one the user quit with.
         saveLayoutForQuit()
+        // Read here: the quit event is current only during this call.
+        let isSystemQuit = SystemQuitDecision.isSystemQuit(
+            reason: currentQuitReason(),
+            powerOffNotified: powerOffNotified
+        )
         let liveIDs = workspace.windows.map(\.id)
         if liveIDs.isEmpty { return .terminateNow }
         Task { @MainActor in
@@ -1378,7 +1399,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if !booted.isEmpty {
                 let quit = CloseDecisions.quitWithSims(
                     config: ConfigFile(),
-                    state: CloseSuppressionState.shared
+                    state: CloseSuppressionState.shared,
+                    isSystemQuit: isSystemQuit
                 )
                 if quit == .shutdownSims {
                     mode = .shutdown
@@ -1417,6 +1439,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// The `kAEQuitReason` of the quit Apple Event being handled, or nil for
+    /// a quit that didn't arrive as one (⌘Q) or carries no reason.
+    private func currentQuitReason() -> OSType? {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+            event.eventID == AEEventID(kAEQuitApplication) else { return nil }
+        let keyword = AEKeyword(kAEQuitReason)
+        guard let reason = event.attributeDescriptor(forKeyword: keyword)
+            ?? event.paramDescriptor(forKeyword: keyword) else { return nil }
+        // Sent as an enumerated value or a type code; each read is 0 when
+        // the descriptor doesn't coerce to it.
+        let code = reason.enumCodeValue
+        return code != 0 ? code : reason.typeCodeValue
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(
