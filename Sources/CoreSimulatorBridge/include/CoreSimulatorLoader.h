@@ -24,7 +24,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface CSBProbeReport : NSObject
 
 @property (nonatomic, copy, readonly) NSString *macOSVersion;
-/// `xcodebuild -version` from the process-lifetime `developerDir` snapshot.
+/// `xcodebuild -version` from the cached developer-directory selection.
 @property (nonatomic, copy, readonly) NSString *xcodeVersion;
 @property (nonatomic, copy, readonly) NSString *developerDir;
 
@@ -44,24 +44,29 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Dynamic loader + compatibility probe for CoreSimulator.framework.
 ///
-/// `load()` and `probe()` are class methods; both are thread-safe and
-/// idempotent. After a successful `load()`, the framework binary remains
-/// in the process for the lifetime of the host.
+/// `load()` and `probe()` are class methods; both are thread-safe. After a
+/// successful `load()`, the framework binary remains in the process for the
+/// lifetime of the host; a failed one retries on the next call.
 @interface CoreSimulatorLoader : NSObject
 
-/// Locate and `dlopen` CoreSimulator.framework. Idempotent and
-/// thread-safe (`dispatch_once`-guarded). The resolved path is available
-/// via `resolvedFrameworkPath` after this returns `YES`.
+/// Locate and `dlopen` CoreSimulator.framework. Thread-safe; a success is
+/// cached for the process lifetime, and a failure retries on the next call.
+/// The resolved path is available via `resolvedFrameworkPath` after this
+/// returns `YES`.
 ///
 /// Tries paths in the order returned by `candidateFrameworkPaths(forDeveloperDir:)`
-/// against the developer dir from `$DEVELOPER_DIR` or `xcode-select -p`.
-/// Returns `NO` and populates `error` if every candidate is absent or
-/// fails to load.
+/// against the `resolveDeveloperDir()` snapshot. A retry tries the current
+/// selection first, merged as `loadRetryDeveloperDirs(forResolved:current:)`
+/// describes. The snapshot moves to that selection only when the framework
+/// loaded from inside it (see `developerDir(_:suppliedFrameworkAtPath:)`).
+/// Returns `NO` and populates `error` if every candidate is absent or fails
+/// to load; the error's description lists each path tried.
 + (BOOL)loadWithError:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(loadFramework());
 
-/// Locate and `dlopen` SimulatorKit.framework. Idempotent and
-/// thread-safe (`dispatch_once`-guarded). Required for any bridge
+/// Locate and `dlopen` SimulatorKit.framework. Thread-safe, with the same
+/// success caching, retry, and error shape as `loadFramework()`, against
+/// `candidateSimulatorKitPaths(forDeveloperDir:)`. Required for any bridge
 /// module that drives input. SimulatorKit hosts the
 /// `SimDeviceLegacyHIDClient` class and the Indigo wire-format helper
 /// C functions that `SimHIDClient` uses.
@@ -89,18 +94,25 @@ NS_ASSUME_NONNULL_BEGIN
 /// `dlopen`'d, or `nil` if `loadFramework()` has not succeeded.
 @property (class, nullable, readonly) NSString *resolvedFrameworkPath;
 
-/// Process-lifetime snapshot of the active developer directory. On first
-/// access, reads `DEVELOPER_DIR` from the process env if set; otherwise
-/// shells out to `xcode-select -p`. The result, including an empty failure
-/// result, is cached for the life of the process. A later environment or
-/// `xcode-select` change takes effect after the host process restarts.
-/// Synchronous and safe to call from any thread.
+/// Snapshot of the active developer directory. Reads `DEVELOPER_DIR` from the
+/// process env if set, otherwise shells out to `xcode-select -p`, and keeps
+/// the first non-empty result; an empty one is read again on the next call.
+/// The snapshot then changes only when a framework load retry loads from
+/// inside a newer selection, which it adopts. Later service contexts use the
+/// adopted selection. Frameworks already loaded remain unchanged. Synchronous
+/// and safe to call from any thread.
 ///
 /// Bridge modules that need to locate SDK-relative resources call
 /// this so the resolution policy and the Xcode selection shared by their
 /// service contexts stay in one place.
 + (NSString *)resolveDeveloperDir
     NS_SWIFT_NAME(resolveDeveloperDir());
+
+/// The `SimServiceContext` for the `resolveDeveloperDir()` snapshot, or `nil`
+/// with `error` set. Refuses an empty snapshot with an error that says to
+/// select an Xcode, because CoreSimulator throws on an empty developer dir.
+/// Typed `id` so this header stays free of the private CoreSimulator headers.
++ (nullable id)sharedServiceContextWithError:(NSError * _Nullable * _Nullable)error;
 
 /// Candidate framework paths the loader would try, given a developer-dir
 /// hint. Pure function: does not touch process env or shell out. Exposed
@@ -120,6 +132,28 @@ NS_ASSUME_NONNULL_BEGIN
 /// diagnostics/testing purpose as `candidateFrameworkPaths(forDeveloperDir:)`.
 + (NSArray<NSString *> *)candidateSimulatorKitPathsForDeveloperDir:(NSString *)developerDir
     NS_SWIFT_NAME(candidateSimulatorKitPaths(forDeveloperDir:));
+
+/// Developer dirs a load retry walks: the current selection, then the
+/// cached developer-directory selection, each once and skipping empties. Returns `[""]`
+/// when both are empty, so the developer-dir-independent fallbacks still run.
+/// Pure function.
++ (NSArray<NSString *> *)loadRetryDeveloperDirsForResolved:(NSString *)resolved
+                                                   current:(NSString *)current
+    NS_SWIFT_NAME(loadRetryDeveloperDirs(forResolved:current:));
+
+/// Whether `frameworkPath` lies inside the Xcode `developerDir` names: under
+/// its `Contents` directory for an Xcode `Contents/Developer` path, otherwise
+/// under the dir itself. Decides whether a load retry adopts the selection.
+/// Pure function.
++ (BOOL)developerDir:(NSString *)developerDir suppliedFrameworkAtPath:(NSString *)frameworkPath
+    NS_SWIFT_NAME(developerDir(_:suppliedFrameworkAtPath:));
+
+/// Description for a framework that no candidate loaded: names the
+/// framework, says to select an Xcode and retry, then lists every
+/// `attempted` entry in order. Pure function.
++ (NSString *)loadFailureDescriptionForFramework:(NSString *)frameworkName
+                                       attempted:(NSArray<NSString *> *)attempted
+    NS_SWIFT_NAME(loadFailureDescription(forFramework:attempted:));
 
 @end
 

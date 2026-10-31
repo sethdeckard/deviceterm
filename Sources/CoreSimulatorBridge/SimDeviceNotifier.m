@@ -184,15 +184,14 @@ static SimServiceContext * _Nullable CSBNResolveContext(NSError **error) {
         }
         return nil;
     }
-    NSString *devDir = [CoreSimulatorLoader resolveDeveloperDir];
     NSError *inner = nil;
-    SimServiceContext *ctx = [ctxCls sharedServiceContextForDeveloperDir:devDir error:&inner];
+    SimServiceContext *ctx = [CoreSimulatorLoader sharedServiceContextWithError:&inner];
     if (!ctx && error) {
         *error = inner ?: [NSError errorWithDomain:kCSBErrorDomain
                                               code:CSBNotifierErrorContextUnavailable
                                           userInfo:@{
             NSLocalizedDescriptionKey: @"sharedServiceContextForDeveloperDir:error: returned nil",
-            @"developerDir": devDir,
+            @"developerDir": [CoreSimulatorLoader resolveDeveloperDir],
         }];
     }
     return ctx;

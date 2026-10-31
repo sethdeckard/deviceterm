@@ -41,9 +41,8 @@ static const int64_t kCSBFoldSpawnTimeoutSeconds = 10;
         }
         return nil;
     }
-    NSString *devDir = [CoreSimulatorLoader resolveDeveloperDir];
     NSError *inner = nil;
-    SimServiceContext *ctx = [ctxCls sharedServiceContextForDeveloperDir:devDir error:&inner];
+    SimServiceContext *ctx = [CoreSimulatorLoader sharedServiceContextWithError:&inner];
     if (!ctx) {
         if (error) *error = inner;
         return nil;

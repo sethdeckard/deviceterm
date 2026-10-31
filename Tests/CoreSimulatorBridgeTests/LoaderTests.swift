@@ -29,7 +29,7 @@ private let profilesFrameworkPath =
 private let developerDirectoryCacheChildKey =
     "DEVICETERM_TEST_DEVELOPER_DIRECTORY_CACHE_CHILD"
 private let developerDirectoryCacheFilter =
-    "developerDirectoryResolutionIsStableForProcessLifetime"
+    "developerDirectoryResolutionIgnoresLaterEnvironmentChanges"
 
 /// True iff the host is *fully* CoreSimulator-compatible per the probe:
 /// not just "framework loadable," but every required class/selector/
@@ -43,9 +43,9 @@ private let developerDirectoryCacheFilter =
 /// gate: if the probe doesn't pass, the live tests skip rather than
 /// fail.
 ///
-/// Evaluated once at discovery time; the dispatch_once inside the loader
-/// makes the cost a single dlopen attempt regardless of how many tests
-/// reference this flag.
+/// Evaluated once at discovery time. On a working host the loader caches its
+/// successful load, so the cost is a single dlopen attempt regardless of how
+/// many tests reference this flag.
 private let coreSimulatorAvailable: Bool = {
     CoreSimulatorLoader.probe().ok
 }()
@@ -127,8 +127,55 @@ func simulatorKitCandidatePathsKeepHistoricalFallbackWithoutDuplicates() {
     #expect(sharedCount == 1, "shared SimulatorKit fallback appeared \(sharedCount) times")
 }
 
+// MARK: - Pure: load retry
+
+private let commandLineToolsDir = "/Library/Developer/CommandLineTools"
+private let xcode271DeveloperDir = "/Applications/Xcode_27_1.app/Contents/Developer"
+
+@Test("load retry developer dirs", arguments: [
+    (xcodeAppDeveloperDir, xcodeAppDeveloperDir, [xcodeAppDeveloperDir]),
+    (commandLineToolsDir, xcode271DeveloperDir, [xcode271DeveloperDir, commandLineToolsDir]),
+    ("", xcodeAppDeveloperDir, [xcodeAppDeveloperDir]),
+    (commandLineToolsDir, "", [commandLineToolsDir]),
+    ("", "", [""])
+])
+func loadRetryDeveloperDirsPutCurrentSelectionFirst(resolved: String, current: String, expected: [String]) {
+    #expect(CoreSimulatorLoader.loadRetryDeveloperDirs(forResolved: resolved, current: current) == expected)
+}
+
+private let xcode271SharedSimulatorKitPath =
+    "/Applications/Xcode_27_1.app/Contents/SharedFrameworks/SimulatorKit.framework/SimulatorKit"
+private let xcode271LegacySimulatorKitPath =
+    xcode271DeveloperDir + "/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
+
+@Test("developer dir supplied the framework", arguments: [
+    (xcode271DeveloperDir, xcode271SharedSimulatorKitPath, true),
+    (xcode271DeveloperDir, xcode271LegacySimulatorKitPath, true),
+    (xcode271DeveloperDir + "/", xcode271SharedSimulatorKitPath, true),
+    (xcode271DeveloperDir, xcodeAppSharedSimulatorKitPath, false),
+    (xcode271DeveloperDir, systemFrameworkPath, false),
+    (commandLineToolsDir, systemFrameworkPath, false),
+    (xcodeAppDeveloperDir, "/Applications/Xcode.app.old/Contents/SharedFrameworks/x", false),
+    ("", xcodeAppSharedSimulatorKitPath, false)
+])
+func developerDirSuppliedFramework(developerDir: String, frameworkPath: String, expected: Bool) {
+    #expect(CoreSimulatorLoader.developerDir(developerDir, suppliedFrameworkAtPath: frameworkPath) == expected)
+}
+
 @Test
-func developerDirectoryResolutionIsStableForProcessLifetime() throws {
+func loadFailureDescriptionListsEveryAttemptInOrder() {
+    let attempted = [
+        "missing: /Library/Developer/CommandLineTools/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+        "dlopen failed (code signature invalid): \(xcodeAppSharedSimulatorKitPath)"
+    ]
+    let description = CoreSimulatorLoader.loadFailureDescription(forFramework: "SimulatorKit", attempted: attempted)
+    #expect(description.hasPrefix("Could not load SimulatorKit.framework."))
+    #expect(description.contains("xcode-select -s"))
+    #expect(description.hasSuffix("Tried: " + attempted.joined(separator: "; ")))
+}
+
+@Test
+func developerDirectoryResolutionIgnoresLaterEnvironmentChanges() throws {
     if ProcessInfo.processInfo.environment[developerDirectoryCacheChildKey] != "1" {
         let arguments = CommandLine.arguments
         let bundleFlagIndex = try #require(
@@ -190,6 +237,16 @@ func liveLoadSucceedsOnDeveloperHost() throws {
     let resolved = CoreSimulatorLoader.resolvedFrameworkPath
     #expect(resolved != nil)
     #expect(resolved?.hasSuffix("CoreSimulator.framework/CoreSimulator") == true)
+}
+
+@Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))
+func liveLoadsKeepTheirFirstSuccess() throws {
+    try CoreSimulatorLoader.loadFramework()
+    let framework = CoreSimulatorLoader.resolvedFrameworkPath
+    try CoreSimulatorLoader.loadSimulatorKit()
+    try CoreSimulatorLoader.loadFramework()
+    try CoreSimulatorLoader.loadSimulatorKit()
+    #expect(CoreSimulatorLoader.resolvedFrameworkPath == framework)
 }
 
 @Test(.disabled(if: !coreSimulatorAvailable, "CoreSimulator not available on host"))

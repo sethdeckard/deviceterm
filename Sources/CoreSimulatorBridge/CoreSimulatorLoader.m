@@ -2,6 +2,7 @@
 
 #import "CoreSimulatorLoader.h"
 
+#import <CoreSimulator/SimServiceContext.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
 
@@ -9,26 +10,44 @@
 
 static NSString *const kCSBErrorDomain = @"CoreSimulatorBridge.Loader";
 
-// Set on the first `+resolveDeveloperDir` call. The loaded private
-// frameworks and their service contexts must agree on one Xcode selection
-// for the process lifetime; adopting a later `xcode-select` change requires
-// restarting the host process.
-static dispatch_once_t gDeveloperDirOnce;
-static NSString *gResolvedDeveloperDir = nil;
+// The cached developer-directory selection that service contexts and framework
+// loads use. Read on `CSBDeveloperDirQueue()` only. Set by the first non-empty
+// read, then moved only when a framework load retry loads from inside a newer
+// selection. Later service contexts use the adopted selection. Frameworks
+// already loaded remain unchanged.
+static NSString *gDeveloperDir = nil;
 
-// Set once by `+loadWithError:` under dispatch_once. Reads from any thread
-// thereafter are safe because the values are immutable after the once-block
-// runs (the dispatch_once memory barrier synchronizes the publication).
-static dispatch_once_t gLoadOnce;
+// CoreSimulator and SimulatorKit load state. Every read and write happens on
+// `CSBLoadQueue()`. Only a successful load is kept: a failed one records its
+// error and retries on the next call, so an Xcode installed or selected while
+// the host runs is picked up without a restart.
 static void *gFrameworkHandle = NULL;
 static NSString *gResolvedFrameworkPath = nil;
 static NSError *gLoadError = nil;
-
-// SimulatorKit load state, same dispatch_once shape as CoreSimulator.
-static dispatch_once_t gSimulatorKitLoadOnce;
 static void *gSimulatorKitHandle = NULL;
 static NSString *gResolvedSimulatorKitPath = nil;
 static NSError *gSimulatorKitLoadError = nil;
+
+/// Serial queue that owns the developer-dir snapshot. Separate from
+/// `CSBLoadQueue()`, which reads the snapshot while it holds its own state.
+static dispatch_queue_t CSBDeveloperDirQueue(void) {
+    static dispatch_once_t once;
+    static dispatch_queue_t queue;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("CoreSimulatorBridge.DeveloperDir", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+/// Serial queue that owns the CoreSimulator and SimulatorKit load state.
+static dispatch_queue_t CSBLoadQueue(void) {
+    static dispatch_once_t once;
+    static dispatch_queue_t queue;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("CoreSimulatorBridge.Loader", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
 
 // AccessibilityPlatformTranslation load state.
 static dispatch_once_t gAXPLoadOnce;
@@ -96,17 +115,148 @@ static NSString *const kAXPFrameworkPath =
 
 #pragma mark Public API
 
-+ (NSString *)resolveDeveloperDir {
-    dispatch_once(&gDeveloperDirOnce, ^{
-        NSString *envDir = NSProcessInfo.processInfo.environment[@"DEVELOPER_DIR"];
-        NSString *resolved = envDir.length > 0
-            ? envDir
-            : [self _runCommand:@"/usr/bin/xcode-select"
-                      arguments:@[@"-p"]
-                    environment:@{}];
-        gResolvedDeveloperDir = [resolved copy] ?: @"";
+/// The current Xcode selection: `DEVELOPER_DIR` when set, otherwise
+/// `xcode-select -p`. Uncached; `+resolveDeveloperDir` holds the snapshot.
++ (NSString *)_readDeveloperDir {
+    NSString *envDir = NSProcessInfo.processInfo.environment[@"DEVELOPER_DIR"];
+    NSString *resolved = envDir.length > 0
+        ? envDir
+        : [self _runCommand:@"/usr/bin/xcode-select"
+                  arguments:@[@"-p"]
+                environment:@{}];
+    return [resolved copy] ?: @"";
+}
+
+/// Make `developerDir` the snapshot `+resolveDeveloperDir` returns.
++ (void)_adoptDeveloperDir:(NSString *)developerDir {
+    dispatch_sync(CSBDeveloperDirQueue(), ^{
+        gDeveloperDir = [developerDir copy];
     });
-    return gResolvedDeveloperDir;
+}
+
+/// One load attempt for a framework, run on `CSBLoadQueue()` against that
+/// framework's state. Does nothing once `handle` is set. A first attempt walks
+/// the snapshot's candidates; a retry walks the current selection's first, and
+/// the snapshot moves to that selection only when its Xcode supplied the
+/// framework, never on a load from the old selection or a machine-wide fallback.
++ (void)_attemptLoadOfFramework:(NSString *)frameworkName
+                   simulatorKit:(BOOL)simulatorKit
+                      errorCode:(NSInteger)errorCode
+                         handle:(void **)handle
+                   resolvedPath:(NSString * __strong *)resolvedPath
+                      loadError:(NSError * __strong *)loadError {
+    if (*handle != NULL) return;
+    BOOL isRetry = *loadError != nil;
+    NSString *resolved = [self resolveDeveloperDir];
+    NSString *current = isRetry ? [self _readDeveloperDir] : resolved;
+    NSArray<NSString *> *dirs = isRetry
+        ? [self loadRetryDeveloperDirsForResolved:resolved current:current]
+        : @[resolved];
+    NSArray<NSString *> *candidates = [self _candidatesForDeveloperDirs:dirs simulatorKit:simulatorKit];
+    NSMutableArray<NSString *> *attempted = [NSMutableArray arrayWithCapacity:candidates.count];
+    NSString *path = nil;
+    *handle = [self _openFirstOfCandidates:candidates resolvedPath:&path attempted:attempted];
+    if (*handle != NULL) {
+        *resolvedPath = path;
+        *loadError = nil;
+        if (![current isEqualToString:resolved]
+            && [self developerDir:current suppliedFrameworkAtPath:path]) {
+            [self _adoptDeveloperDir:current];
+        }
+        return;
+    }
+    *loadError = [NSError errorWithDomain:kCSBErrorDomain code:errorCode userInfo:@{
+        NSLocalizedDescriptionKey: [self loadFailureDescriptionForFramework:frameworkName attempted:attempted],
+        @"developerDir": dirs.firstObject,
+        @"attempted": [attempted copy],
+    }];
+}
+
+/// Walk `candidates` in order and `dlopen` the first that exists and loads.
+/// Appends one `missing:` or `dlopen failed` entry to `attempted` per path
+/// that didn't, and returns `NULL` when none did.
++ (void *)_openFirstOfCandidates:(NSArray<NSString *> *)candidates
+                    resolvedPath:(NSString **)resolvedPath
+                       attempted:(NSMutableArray<NSString *> *)attempted {
+    for (NSString *path in candidates) {
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [attempted addObject:[NSString stringWithFormat:@"missing: %@", path]];
+            continue;
+        }
+        void *handle = dlopen(path.UTF8String, RTLD_LAZY | RTLD_GLOBAL);
+        if (handle != NULL) {
+            *resolvedPath = [path copy];
+            return handle;
+        }
+        const char *dlErr = dlerror();
+        [attempted addObject:[NSString stringWithFormat:@"dlopen failed (%s): %@",
+                              dlErr ? dlErr : "(no error)", path]];
+    }
+    return NULL;
+}
+
+/// Candidates for every dir in `developerDirs`, in dir order, each path once.
++ (NSArray<NSString *> *)_candidatesForDeveloperDirs:(NSArray<NSString *> *)developerDirs
+                                          simulatorKit:(BOOL)simulatorKit {
+    NSMutableOrderedSet<NSString *> *candidates = [NSMutableOrderedSet orderedSet];
+    for (NSString *dir in developerDirs) {
+        [candidates addObjectsFromArray:simulatorKit
+            ? [self candidateSimulatorKitPathsForDeveloperDir:dir]
+            : [self candidateFrameworkPathsForDeveloperDir:dir]];
+    }
+    return candidates.array;
+}
+
++ (NSString *)resolveDeveloperDir {
+    __block NSString *developerDir = nil;
+    dispatch_sync(CSBDeveloperDirQueue(), ^{
+        if (gDeveloperDir.length == 0) {
+            gDeveloperDir = [self _readDeveloperDir];
+        }
+        developerDir = gDeveloperDir;
+    });
+    return developerDir;
+}
+
++ (id)sharedServiceContextWithError:(NSError **)error {
+    NSString *developerDir = [self resolveDeveloperDir];
+    if (developerDir.length == 0) {
+        // `sharedServiceContextForDeveloperDir:` throws on an empty path
+        // rather than returning an error.
+        if (error) {
+            *error = [NSError errorWithDomain:kCSBErrorDomain code:4 userInfo:@{
+                NSLocalizedDescriptionKey: @"No Xcode is selected. Select one with xcode-select -s, then retry.",
+            }];
+        }
+        return nil;
+    }
+    return [NSClassFromString(@"SimServiceContext") sharedServiceContextForDeveloperDir:developerDir
+                                                                                   error:error];
+}
+
++ (NSArray<NSString *> *)loadRetryDeveloperDirsForResolved:(NSString *)resolved current:(NSString *)current {
+    NSMutableOrderedSet<NSString *> *dirs = [NSMutableOrderedSet orderedSet];
+    if (current.length > 0) [dirs addObject:current];
+    if (resolved.length > 0) [dirs addObject:resolved];
+    return dirs.count > 0 ? dirs.array : @[@""];
+}
+
++ (BOOL)developerDir:(NSString *)developerDir suppliedFrameworkAtPath:(NSString *)frameworkPath {
+    if (developerDir.length == 0 || frameworkPath.length == 0) return NO;
+    NSString *root = developerDir.stringByStandardizingPath;
+    NSString *contentsDir = root.stringByDeletingLastPathComponent;
+    if ([root.lastPathComponent isEqualToString:@"Developer"]
+        && [contentsDir.lastPathComponent isEqualToString:@"Contents"]) {
+        root = contentsDir;
+    }
+    return [frameworkPath.stringByStandardizingPath hasPrefix:[root stringByAppendingString:@"/"]];
+}
+
++ (NSString *)loadFailureDescriptionForFramework:(NSString *)frameworkName
+                                       attempted:(NSArray<NSString *> *)attempted {
+    return [NSString stringWithFormat:
+            @"Could not load %@.framework. Select an Xcode with xcode-select -s, then retry. Tried: %@",
+            frameworkName, [attempted componentsJoinedByString:@"; "]];
 }
 
 + (NSArray<NSString *> *)candidateFrameworkPathsForDeveloperDir:(NSString *)developerDir {
@@ -141,41 +291,40 @@ static NSString *const kAXPFrameworkPath =
 }
 
 + (BOOL)loadWithError:(NSError **)error {
-    dispatch_once(&gLoadOnce, ^{
-        NSString *developerDir = [self resolveDeveloperDir];
-        NSArray<NSString *> *candidates = [self candidateFrameworkPathsForDeveloperDir:developerDir];
-        NSMutableArray<NSString *> *attempted = [NSMutableArray arrayWithCapacity:candidates.count];
-
-        for (NSString *path in candidates) {
-            if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
-                [attempted addObject:[NSString stringWithFormat:@"missing: %@", path]];
-                continue;
-            }
-            void *handle = dlopen(path.UTF8String, RTLD_LAZY | RTLD_GLOBAL);
-            if (handle != NULL) {
-                gFrameworkHandle = handle;
-                gResolvedFrameworkPath = [path copy];
-                return;  // exits the once-block; gLoadError stays nil.
-            }
-            const char *dlErr = dlerror();
-            [attempted addObject:[NSString stringWithFormat:@"dlopen failed (%s): %@",
-                                  dlErr ? dlErr : "(no error)", path]];
-        }
-
-        gLoadError = [NSError errorWithDomain:kCSBErrorDomain code:1 userInfo:@{
-            NSLocalizedDescriptionKey: @"Could not locate CoreSimulator.framework on this machine.",
-            @"developerDir": developerDir,
-            @"attempted": [attempted copy],
-        }];
+    __block BOOL loaded = NO;
+    __block NSError *loadError = nil;
+    dispatch_sync(CSBLoadQueue(), ^{
+        [self _attemptLoadOfFramework:@"CoreSimulator"
+                         simulatorKit:NO
+                            errorCode:1
+                               handle:&gFrameworkHandle
+                         resolvedPath:&gResolvedFrameworkPath
+                            loadError:&gLoadError];
+        loaded = gFrameworkHandle != NULL;
+        loadError = gLoadError;
     });
 
-    if (gFrameworkHandle != NULL) return YES;
-    if (error) *error = gLoadError;
+    if (loaded) return YES;
+    if (error) *error = loadError;
     return NO;
 }
 
+/// Path of the SimulatorKit binary that loaded, or `nil` before a successful
+/// `+loadSimulatorKitWithError:`.
++ (NSString *)_resolvedSimulatorKitPath {
+    __block NSString *path = nil;
+    dispatch_sync(CSBLoadQueue(), ^{
+        path = gResolvedSimulatorKitPath;
+    });
+    return path;
+}
+
 + (NSString *)resolvedFrameworkPath {
-    return gResolvedFrameworkPath;
+    __block NSString *path = nil;
+    dispatch_sync(CSBLoadQueue(), ^{
+        path = gResolvedFrameworkPath;
+    });
+    return path;
 }
 
 #pragma mark SimulatorKit loader
@@ -216,36 +365,21 @@ static NSString *const kAXPFrameworkPath =
 }
 
 + (BOOL)loadSimulatorKitWithError:(NSError **)error {
-    dispatch_once(&gSimulatorKitLoadOnce, ^{
-        NSString *developerDir = [self resolveDeveloperDir];
-        NSArray<NSString *> *candidates = [self candidateSimulatorKitPathsForDeveloperDir:developerDir];
-        NSMutableArray<NSString *> *attempted = [NSMutableArray arrayWithCapacity:candidates.count];
-
-        for (NSString *path in candidates) {
-            if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
-                [attempted addObject:[NSString stringWithFormat:@"missing: %@", path]];
-                continue;
-            }
-            void *handle = dlopen(path.UTF8String, RTLD_LAZY | RTLD_GLOBAL);
-            if (handle != NULL) {
-                gSimulatorKitHandle = handle;
-                gResolvedSimulatorKitPath = [path copy];
-                return;
-            }
-            const char *dlErr = dlerror();
-            [attempted addObject:[NSString stringWithFormat:@"dlopen failed (%s): %@",
-                                  dlErr ? dlErr : "(no error)", path]];
-        }
-
-        gSimulatorKitLoadError = [NSError errorWithDomain:kCSBErrorDomain code:2 userInfo:@{
-            NSLocalizedDescriptionKey: @"Could not locate SimulatorKit.framework on this machine.",
-            @"developerDir": developerDir,
-            @"attempted": [attempted copy],
-        }];
+    __block BOOL loaded = NO;
+    __block NSError *loadError = nil;
+    dispatch_sync(CSBLoadQueue(), ^{
+        [self _attemptLoadOfFramework:@"SimulatorKit"
+                         simulatorKit:YES
+                            errorCode:2
+                               handle:&gSimulatorKitHandle
+                         resolvedPath:&gResolvedSimulatorKitPath
+                            loadError:&gSimulatorKitLoadError];
+        loaded = gSimulatorKitHandle != NULL;
+        loadError = gSimulatorKitLoadError;
     });
 
-    if (gSimulatorKitHandle != NULL) return YES;
-    if (error) *error = gSimulatorKitLoadError;
+    if (loaded) return YES;
+    if (error) *error = loadError;
     return NO;
 }
 
@@ -297,7 +431,7 @@ static NSString *const kAXPFrameworkPath =
                                    loadError.localizedDescription ?: @"unknown error"]];
         return report;
     }
-    report.frameworkPath = gResolvedFrameworkPath ?: @"";
+    report.frameworkPath = self.resolvedFrameworkPath ?: @"";
 
     // SimulatorKit doesn't gate the probe the way CoreSimulator does: a
     // failure to load it surfaces as a `framework SimulatorKit: …` entry
@@ -535,7 +669,7 @@ static NSString *const kAXPFrameworkPath =
     // succeeded by this point (we'd have early-returned otherwise).
     if (simKitLoaded) {
         [ok addObject:[NSString stringWithFormat:@"framework SimulatorKit (%@)",
-                       gResolvedSimulatorKitPath ?: @"?"]];
+                       [self _resolvedSimulatorKitPath] ?: @"?"]];
     } else {
         [missing addObject:[NSString stringWithFormat:@"framework SimulatorKit: %@",
                             simKitLoadError.localizedDescription ?: @"unknown error"]];

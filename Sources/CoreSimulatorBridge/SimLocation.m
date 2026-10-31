@@ -39,9 +39,8 @@ typedef NS_ENUM(NSInteger, CSBLocationError) {
         }
         return nil;
     }
-    NSString *devDir = [CoreSimulatorLoader resolveDeveloperDir];
     NSError *inner = nil;
-    SimServiceContext *ctx = [ctxCls sharedServiceContextForDeveloperDir:devDir error:&inner];
+    SimServiceContext *ctx = [CoreSimulatorLoader sharedServiceContextWithError:&inner];
     if (!ctx) {
         if (error) {
             *error = inner ?: [NSError errorWithDomain:kCSBErrorDomain

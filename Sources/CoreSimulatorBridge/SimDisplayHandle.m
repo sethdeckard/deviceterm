@@ -341,9 +341,8 @@ static BOOL CSBIsLargestCandidate(
 + (nullable SimServiceContext *)_serviceContextWithError:(NSError **)error {
     Class ctxCls = NSClassFromString(@"SimServiceContext");
     if (!ctxCls) return nil;
-    NSString *devDir = [CoreSimulatorLoader resolveDeveloperDir];
     NSError *inner = nil;
-    SimServiceContext *ctx = [ctxCls sharedServiceContextForDeveloperDir:devDir error:&inner];
+    SimServiceContext *ctx = [CoreSimulatorLoader sharedServiceContextWithError:&inner];
     if (!ctx && error) *error = inner;
     return ctx;
 }
